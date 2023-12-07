@@ -7,16 +7,19 @@
 @time:2023/7/8 17:01
 '''
 
+import argparse
+import csv
+import os
+import random
+import shutil
+from pathlib import Path
+
 import pandas as pd
 
-from utils.project_utils import mkdir_if_not_exist,traverse_dir_files
-import os
-import shutil
-import csv
-import random
-import argparse
+from utils.project_utils import mkdir_if_not_exist, traverse_dir_files
 
-def make_labels_isic(dataset='ISIC2018',label_path=None,ori_path=None,target_path=None):
+
+def make_labels_isic(dataset='ISIC2018', label_path=None, ori_path=None, target_path=None):
     '''
 
     :param dataset: e.g.ISIC2018,ISIC2019
@@ -44,26 +47,26 @@ def make_labels_isic(dataset='ISIC2018',label_path=None,ori_path=None,target_pat
 
     print("finish!")
 
-def split_dataset(path,dataset='ISIC2018'):
+
+def split_dataset(path, dataset='ISIC2018'):
     '''
     划分数据集
     :return:
     '''
     # image,category,label 3:1:1
-    data_path = os.path.join(path,'{}_Dataset'.format(dataset))
-    category = os.listdir(data_path) #存储了类别
+    data_path = os.path.join(path, '{}_Dataset'.format(dataset))
+    category = os.listdir(data_path)  # 存储了类别
 
-    #train.csv,val.csv,test.csv
-    f_train = open(os.path.join(path,'{}_train.csv'.format(dataset)), 'a+', newline='')
-    f_val = open(os.path.join(path,'{}_val.csv'.format(dataset)), 'a+', newline='')
-    f_test = open(os.path.join(path,'{}_test.csv'.format(dataset)), 'a+', newline='')
+    # train.csv,val.csv,test.csv
+    f_train = open(os.path.join(path, '{}_train.csv'.format(dataset)), 'a+', newline='')
+    f_val = open(os.path.join(path, '{}_val.csv'.format(dataset)), 'a+', newline='')
+    f_test = open(os.path.join(path, '{}_test.csv'.format(dataset)), 'a+', newline='')
 
     train_writer = csv.writer(f_train)
     val_writer = csv.writer(f_val)
     test_writer = csv.writer(f_test)
 
-
-    headers = ['image','category','label']
+    headers = ['image', 'category', 'label']
     train_writer.writerow(headers)
     val_writer.writerow(headers)
     test_writer.writerow(headers)
@@ -72,20 +75,20 @@ def split_dataset(path,dataset='ISIC2018'):
     val_writer = csv.writer(f_val)
     test_writer = csv.writer(f_test)
 
-    for label,cate in enumerate(category):
-        dir_path = os.path.join(data_path,cate)
-        paths_list,_ = traverse_dir_files(dir_path)
+    for label, cate in enumerate(category):
+        dir_path = os.path.join(data_path, cate)
+        paths_list, _ = traverse_dir_files(dir_path)
 
         random.shuffle(paths_list)
-        for idx,path in enumerate(paths_list):
+        for idx, path in enumerate(paths_list):
             row = []
             img_name = path.split('/')[-1].split('.')[0]
             row.append(img_name)
             row.append(cate)
             row.append(label)
-            if idx % 5 ==0:
+            if idx % 5 == 0:
                 test_writer.writerow(row)
-            elif idx % 5 ==1:
+            elif idx % 5 == 1:
                 val_writer.writerow(row)
             else:
                 train_writer.writerow(row)
@@ -94,16 +97,34 @@ def split_dataset(path,dataset='ISIC2018'):
     f_test.close()
     print("finish!")
 
-parser = argparse.ArgumentParser(description='preprocess the dataset donwloaded from ISIC')
-parser.add_argument('--dataset',default='ISIC2018',type=str,help='ISIC2018 or ISIC2019')
-parser.add_argument('--datapath',default='/home/ISIC2019',type=str,help='the path of dataset')
+
+file_dict = {
+    'ISIC2018': {
+        'label_path': 'ISIC2018_Task3_Training_GroundTruth/ISIC2018_Task3_Training_GroundTruth.csv',
+        'ori_path': 'ISIC2018_Task3_Training_Input',
+        'target_path': 'ISIC2018_Dataset',
+    },
+    'ISIC2019': {
+        'label_path': 'ISIC_2019_Training_GroundTruth.csv',
+        'ori_path': 'ISIC_2019_Training_Input',
+        'target_path': 'ISIC2019_Dataset',
+    }
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(description='preprocess the dataset donwloaded from ISIC')
+    parser.add_argument('--dataset', default='ISIC2019', type=str, help='ISIC2018 or ISIC2019')
+    args = parser.parse_args()
+
+    dataset = args.dataset
+    datapath = 'data/' + dataset
+    label_path = str(Path(datapath, file_dict[args.dataset]['label_path']))
+    ori_path = str(Path(datapath, file_dict[args.dataset]['ori_path']))
+    target_path = str(Path(datapath, file_dict[args.dataset]['target_path']))
+    make_labels_isic(dataset=dataset, label_path=label_path, ori_path=ori_path, target_path=target_path)
+    split_dataset(path=datapath, dataset=dataset)
+
 
 if __name__ == '__main__':
-    args = parser.parse_args()
-    dataset = args.dataset
-    datapath = args.datapath
-    label_path = os.path.join(datapath,'ISIC_2019_Training_GroundTruth.csv')
-    ori_path = os.path.join(datapath, 'ISIC_2019_Training_Input')
-    target_path = os.path.join(datapath, 'ISIC2019_Dataset')
-    make_labels_isic(dataset=dataset,label_path=label_path,ori_path=ori_path,target_path=target_path)
-    split_dataset(path=datapath,dataset=dataset)
+    main()

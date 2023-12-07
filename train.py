@@ -9,29 +9,37 @@
 
 
 import argparse
-import torch
-import torch.optim as optim
-from torch.utils.data import DataLoader
-import numpy as np
-from torch.autograd import Variable
 import os
 import time
-import torch.nn.functional as F
+from pathlib import Path
+
+import numpy as np
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.autograd import Variable
+from torch.utils.data import DataLoader
 
-from utils.dataset.isic import isic2018_dataset, isic2019_dataset, augmentation_rand, augmentation_sim,augmentation_test
-from utils.eval_metrics import ConfusionMatrix, Auc
-from models.ecl import ECL_model,balanced_proxies
-from models.loss import CE_weight,BHP
-
+from models.ecl import ECL_model, balanced_proxies
+from models.loss import BHP, CE_weight
+from utils.dataset.isic import (augmentation_rand, augmentation_sim,
+                                augmentation_test, isic2018_dataset,
+                                isic2019_dataset)
+from utils.eval_metrics import Auc, ConfusionMatrix
 
 '''function for saving model'''
-def model_snapshot(model,new_modelpath,old_modelpath=None,only_bestmodel=False):
+
+
+def model_snapshot(model, new_modelpath, old_modelpath=None, only_bestmodel=False):
     if only_bestmodel and old_modelpath:
         os.remove(old_modelpath)
-    torch.save(model.state_dict(),new_modelpath)
+    torch.save(model.state_dict(), new_modelpath)
+
 
 '''function for getting proxies number'''
+
+
 def get_proxies_num(cls_num_list):
     ratios = [max(np.array(cls_num_list)) / num for num in cls_num_list]
     prototype_num_list = []
@@ -44,38 +52,31 @@ def get_proxies_num(cls_num_list):
     assert len(prototype_num_list) == len(cls_num_list)
     return prototype_num_list
 
+
 def main(args):
-    log_file = open(os.path.join(args.log_path,'train_log.txt'), 'w')
+    Path(args.log_path).mkdir(parents=True, exist_ok=True)
+    log_file = open(os.path.join(args.log_path, 'train_log.txt'), 'w')
 
     '''print args'''
     for arg in vars(args):
         print(arg, getattr(args, arg))
-        print(arg, getattr(args, arg),file=log_file)
-
+        print(arg, getattr(args, arg), file=log_file)
 
     '''load models'''
-    model = ECL_model(num_classes=args.num_classes,feat_dim=args.feat_dim)
+    model = ECL_model(num_classes=args.num_classes, feat_dim=args.feat_dim)
     proxy_num_list = get_proxies_num(args.cls_num_list)
-    model_proxy = balanced_proxies(dim=args.feat_dim,proxy_num=sum(proxy_num_list))
+    model_proxy = balanced_proxies(dim=args.feat_dim, proxy_num=sum(proxy_num_list))
 
     if args.cuda:
         model.cuda()
         model_proxy.cuda()
-    print("Model size: {:.5f}M".format(sum(p.numel() for p in model.parameters())/1000000.0))
-    print("Model size: {:.5f}M".format(sum(p.numel() for p in model.parameters())/1000000.0),file=log_file)
-    print("Model_proxy size: {:.5f}M".format(sum(p.numel() for p in model_proxy.parameters())/1000000.0))
-    print("Model_proxy size: {:.5f}M".format(sum(p.numel() for p in model_proxy.parameters())/1000000.0),file=log_file)
+    print("Model size: {:.5f}M".format(sum(p.numel() for p in model.parameters()) / 1000000.0))
+    print("Model size: {:.5f}M".format(sum(p.numel() for p in model.parameters()) / 1000000.0), file=log_file)
+    print("Model_proxy size: {:.5f}M".format(sum(p.numel() for p in model_proxy.parameters()) / 1000000.0))
+    print("Model_proxy size: {:.5f}M".format(sum(p.numel()
+          for p in model_proxy.parameters()) / 1000000.0), file=log_file)
     print("=============model init done=============")
-    print("=============model init done=============",file=log_file)
-
-    '''load optimizer'''
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
-    optimizer_proxies = optim.SGD(model_proxy.parameters(), lr=args.lr, weight_decay=args.weight_decay,
-                                  momentum=0.9)
-
-    # cosine lr
-    lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
-    lr_scheduler_proxies = optim.lr_scheduler.CosineAnnealingLR(optimizer_proxies, T_max=args.epochs)
+    print("=============model init done=============", file=log_file)
 
     complete = False
 
@@ -95,12 +96,34 @@ def main(args):
         valid_iterator = DataLoader(isic2019_dataset(path=args.data_path, transform=augmentation_test, mode='valid'),
                                     batch_size=1, shuffle=False, num_workers=2)
         test_iterator = DataLoader(isic2019_dataset(path=args.data_path, transform=augmentation_test, mode='test'),
-                                      batch_size=1, shuffle=False, num_workers=2)
+                                   batch_size=1, shuffle=False, num_workers=2)
     else:
         raise ValueError("dataset error")
 
+    '''load optimizer'''
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
+    optimizer_proxies = optim.SGD(model_proxy.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
+    # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, )
+    # optimizer_proxies = optim.AdamW(model_proxy.parameters(), lr=args.lr, weight_decay=args.weight_decay, )
+
+    # cosine lr
+    lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    lr_scheduler_proxies = optim.lr_scheduler.CosineAnnealingLR(optimizer_proxies, T_max=args.epochs)
+
+    # lr_scheduler = optim.lr_scheduler.OneCycleLR(
+    #     optimizer,
+    #     max_lr=args.lr,
+    #     total_steps=len(train_iterator) * args.epochs,
+    #     pct_start=0.05,
+    # )
+    # lr_scheduler_proxies = optim.lr_scheduler.OneCycleLR(
+    #     optimizer,
+    #     max_lr=args.lr,
+    #     total_steps=len(train_iterator) * args.epochs,
+    #     pct_start=0.05,
+    # )
     '''load loss'''
-    criterion_ce = CE_weight(cls_num_list=args.cls_num_list,E1 = args.E1,E2 = args.E2, E= args.epochs)
+    criterion_ce = CE_weight(cls_num_list=args.cls_num_list, E1=args.E1, E2=args.E2, E=args.epochs)
     criterion_bhp = BHP(cls_num_list=args.cls_num_list, proxy_num_list=proxy_num_list)
     alpha = args.alpha
     beta = args.beta
@@ -116,13 +139,11 @@ def main(args):
             model.train()
             model_proxy.train()
             print('Epoch:{}'.format(e))
-            print('Epoch:{}'.format(e),file=log_file)
+            print('Epoch:{}'.format(e), file=log_file)
 
             start_time_epoch = time.time()
             train_loss = 0.0
 
-            lr_scheduler.step()
-            lr_scheduler_proxies.step()
             optimizer_proxies.zero_grad()
 
             for batch_index, (data, label) in enumerate(train_iterator):
@@ -139,12 +160,13 @@ def main(args):
                 output_proxy = model_proxy()
 
                 feat_mlp = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)
-                loss_ce = criterion_ce(output, diagnosis_label, (e+1), f_score_list)
+                loss_ce = criterion_ce(output, diagnosis_label, (e + 1), f_score_list)
                 loss_bhp = criterion_bhp(output_proxy, feat_mlp, diagnosis_label)
                 loss = alpha * loss_ce + beta * loss_bhp
                 loss.backward()
 
                 optimizer.step()
+                lr_scheduler.step()
 
                 train_loss += loss.item()
 
@@ -153,16 +175,16 @@ def main(args):
                     correct_num = (predicted_results.cpu() == diagnosis_label.cpu()).sum().item()
                     acc = correct_num / len(diagnosis_label)
                     print('Training epoch: {} [{}/{}], Loss: {:.4f}, Accuracy: {:.4f}, Learning rate: {}'.format(e,
-                        batch_index * args.batch_size, len(train_iterator.dataset), loss.item(), acc, optimizer.param_groups[0]['lr']))
+                                                                                                                 batch_index * args.batch_size, len(train_iterator.dataset), loss.item(), acc, optimizer.param_groups[0]['lr']))
                     print('Training epoch: {} [{}/{}], Loss: {:.4f}, Accuracy: {:.4f}, Learning rate: {}'.format(e,
-                        batch_index * args.batch_size, len(train_iterator.dataset), loss.item(), acc, optimizer.param_groups[0]['lr']),file=log_file)
-
+                                                                                                                 batch_index * args.batch_size, len(train_iterator.dataset), loss.item(), acc, optimizer.param_groups[0]['lr']), file=log_file)
 
             optimizer_proxies.step()
+            lr_scheduler_proxies.step()
 
             print("Epoch {} complete! Average Training loss: {:.4f}".format(e, train_loss / len(train_iterator)))
-            print("Epoch {} complete! Average Training loss: {:.4f}".format(e, train_loss / len(train_iterator)),file=log_file)
-
+            print("Epoch {} complete! Average Training loss: {:.4f}".format(
+                e, train_loss / len(train_iterator)), file=log_file)
 
             '''validation'''
             model.eval()
@@ -194,32 +216,32 @@ def main(args):
                 print("Total training time: {:.4f}s, {:.4f} s/epoch, Estimated remaining time: {:.4f}s".format(
                     total_training_time, training_time_epoch, remaining_time))
                 print("Total training time: {:.4f}s, {:.4f} s/epoch, Estimated remaining time: {:.4f}s".format(
-                    total_training_time, training_time_epoch, remaining_time),file=log_file)
+                    total_training_time, training_time_epoch, remaining_time), file=log_file)
 
                 if dia_acc > best_acc:
                     curr_patience = args.patience
                     best_acc = dia_acc
                     new_model_path = os.path.join(args.model_path, 'bestacc_model_{}.pth'.format(e))
-                    model_snapshot(model, new_model_path, old_modelpath=old_model_path,only_bestmodel=True)
+                    model_snapshot(model, new_model_path, old_modelpath=old_model_path, only_bestmodel=True)
                     old_model_path = new_model_path
                     print("Found new best model, saving to disk...")
                 else:
                     curr_patience -= 1
                     if curr_patience == 0:
                         print("Early stopping, best accuracy: {:.4f}".format(best_acc))
-                        print("Early stopping, best accuracy: {:.4f}".format(best_acc),file=log_file)
+                        print("Early stopping, best accuracy: {:.4f}".format(best_acc), file=log_file)
                         complete = True
                         break
 
                 if e == args.epochs - 1:
                     print("Training complete, best accuracy: {:.4f}".format(best_acc))
-                    print("Training complete, best accuracy: {:.4f}".format(best_acc),file=log_file)
+                    print("Training complete, best accuracy: {:.4f}".format(best_acc), file=log_file)
                     complete = True
             log_file.flush()
 
         '''test'''
         if complete:
-            model.load_state_dict(torch.load(old_model_path),strict=True)
+            model.load_state_dict(torch.load(old_model_path), strict=True)
             model.eval()
 
             pro_diag, lab_diag = [], []
@@ -239,10 +261,10 @@ def main(args):
                     confusion_diag.update(predicted_results.cpu().numpy(), diagnosis_label.cpu().numpy())
 
                 print("Test confusion matrix:")
-                print("Test confusion matrix:",file=log_file)
+                print("Test confusion matrix:", file=log_file)
                 confusion_diag.summary(log_file)
                 print("Test AUC:")
-                print("Test AUC:",file=log_file)
+                print("Test AUC:", file=log_file)
                 Auc(pro_diag, lab_diag, args.num_classes, log_file)
 
     except Exception:
@@ -255,10 +277,13 @@ def main(args):
 
 parser = argparse.ArgumentParser(description='Training for the classification task')
 
-#dataset
-parser.add_argument('--data_path', type=str, default='/media/disk/zyl/data/ISIC_CL/ISIC2018/', help='the path of the data')
-parser.add_argument('--dataset', type=str, default='ISIC2018',choices=['ISIC2018','ISIC2019'], help='the name of the dataset')
-parser.add_argument('--model_path', type=str, default="/media/disk/zyl/Experiment/ISIC_CL/ISIC2018/test_git/", help='the path of the model')
+# dataset
+parser.add_argument('--data_path', type=str, default='/media/disk/zyl/data/ISIC_CL/ISIC2018/',
+                    help='the path of the data')
+parser.add_argument('--dataset', type=str, default='ISIC2018',
+                    choices=['ISIC2018', 'ISIC2019'], help='the name of the dataset')
+parser.add_argument('--model_path', type=str,
+                    default="/media/disk/zyl/Experiment/ISIC_CL/ISIC2018/test_git/", help='the path of the model')
 parser.add_argument('--log_path', type=str, default=None, help='the path of the log')
 
 
@@ -274,11 +299,12 @@ parser.add_argument('--gpu', type=str, default='1', help='gpu device ids for CUD
 
 
 # loss weights
-parser.add_argument('--alpha', type=float, default=2.0, choices=[0.5,1.0,2.0], help='weight of the cross entropy loss')
-parser.add_argument('--beta', type=float, default=1.0, choices=[0.5,1.0,2.0],help='weight of the BHP loss')
+parser.add_argument('--alpha', type=float, default=2.0,
+                    choices=[0.5, 1.0, 2.0], help='weight of the cross entropy loss')
+parser.add_argument('--beta', type=float, default=1.0, choices=[0.5, 1.0, 2.0], help='weight of the BHP loss')
 # hyperparameters for ce loss
-parser.add_argument('--E1', type=int, default=20, choices=[20, 30, 40],help='hyperparameter for ce loss')
-parser.add_argument('--E2', type=int, default=50, choices=[50, 60, 70],help='hyperparameter for ce loss')
+parser.add_argument('--E1', type=int, default=20, choices=[20, 30, 40], help='hyperparameter for ce loss')
+parser.add_argument('--E2', type=int, default=50, choices=[50, 60, 70], help='hyperparameter for ce loss')
 
 # hyperparameters for model
 parser.add_argument('--feat_dim', dest='feat_dim', type=int, default=128)
@@ -310,6 +336,7 @@ def _seed_torch(args):
             raise EnvironmentError("GPU device not found")
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
+
 
 if __name__ == '__main__':
     args = parser.parse_args()

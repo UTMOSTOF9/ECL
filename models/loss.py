@@ -7,31 +7,33 @@
 @time:2023/7/8 16:03
 '''
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
+
 
 class CE_weight(nn.Module):
     '''
     Balanced-Weight Cross-Entropy loss function
     '''
 
-    def __init__(self, cls_num_list, E1 = 20, E2 = 50, E = 100):
+    def __init__(self, cls_num_list, E1=20, E2=50, E=100):
         super(CE_weight, self).__init__()
-        self.cls_num_list = cls_num_list
-        cls_num_list = torch.cuda.FloatTensor(cls_num_list)
+        cls_num_list = torch.tensor(cls_num_list)
+        self.register_buffer('cls_num_list', cls_num_list)
 
         # weight of each class for imbalance dataset
-        weight = torch.cuda.FloatTensor(1.0 / cls_num_list)
-        self.weight = (weight / weight.sum()) * len(cls_num_list)
+        weight = 1.0 / cls_num_list
+        weight = (weight / weight.sum()) * len(cls_num_list)
+        self.register_buffer('weight', weight)
 
-        #hyper-parameters of stages
+        # hyper-parameters of stages
         self.E1 = E1
         self.E2 = E2
         self.E = E
 
-    def forward(self, x, target, e, f1_score = [1,1,1,1,1,1,1,1]):
+    def forward(self, x, target, e, f1_score=[1, 1, 1, 1, 1, 1, 1, 1]):
         '''
         :param x: input
         :param target: label
@@ -43,25 +45,27 @@ class CE_weight(nn.Module):
             return F.cross_entropy(x, target)
 
         if e > self.E1 and e <= self.E2:
-            now_power = (e-self.E1) / (self.E2-self.E1)
+            now_power = (e - self.E1) / (self.E2 - self.E1)
             per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
-            per_cls_weights = torch.cuda.FloatTensor(per_cls_weights)
-            return F.cross_entropy(x,target, weight=per_cls_weights)
+            per_cls_weights = torch.tensor(per_cls_weights, device=target.device)
+            return F.cross_entropy(x, target, weight=per_cls_weights)
 
         else:
-            f1_score = torch.cuda.FloatTensor(f1_score)
-            weight = torch.cuda.FloatTensor(1.0 / f1_score)
+            f1_score = torch.tensor(f1_score).type_as(x)
+            weight = torch.tensor(1.0 / f1_score).type_as(x)
             self.weight = (weight / weight.sum()) * len(self.cls_num_list)
             now_power = (e - self.E2) / (self.E - self.E2)
             per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
-            per_cls_weights = torch.cuda.FloatTensor(per_cls_weights)
+            per_cls_weights = torch.tensor(per_cls_weights).type_as(x)
             return F.cross_entropy(x, target, weight=per_cls_weights)
+
 
 class BHP(nn.Module):
     '''
     Balanced-Hybrid-Proxy loss function
     '''
-    def __init__(self,cls_num_list=None, proxy_num_list = None,temperature=0.1,):
+
+    def __init__(self, cls_num_list=None, proxy_num_list=None, temperature=0.1,):
         super(BHP, self).__init__()
         self.temperature = temperature
         self.cls_num_list = cls_num_list
@@ -89,7 +93,7 @@ class BHP(nn.Module):
 
         # get labels of features and proxies
         targets = torch.cat([targets.repeat(2, 1), targets_proxy], dim=0)
-        batch_cls_count = torch.eye(len(self.cls_num_list))[targets].sum(dim=0).squeeze()
+        batch_cls_count = torch.eye(len(self.cls_num_list), device=device)[targets].sum(dim=0).squeeze()
 
         mask = torch.eq(targets, targets.T).float().to(device)
         logits_mask = torch.scatter(
@@ -118,10 +122,9 @@ class BHP(nn.Module):
 
         # get loss
         log_prob = logits - torch.log(exp_logits_sum)
-        mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
+        mean_log_prob_pos = (mask * log_prob).sum(1) / (mask.sum(1) + 1e-7)
 
         loss = - mean_log_prob_pos
         loss = loss.mean()
 
         return loss
-
