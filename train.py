@@ -107,7 +107,7 @@ def main(args):
     # optimizer_proxies = optim.AdamW(model_proxy.parameters(), lr=args.lr, weight_decay=args.weight_decay, )
 
     # cosine lr
-    lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * len(train_iterator))
     lr_scheduler_proxies = optim.lr_scheduler.CosineAnnealingLR(optimizer_proxies, T_max=args.epochs)
 
     # lr_scheduler = optim.lr_scheduler.OneCycleLR(
