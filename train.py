@@ -13,12 +13,10 @@ import os
 import time
 from pathlib import Path
 
+import cv2
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-from torch.autograd import Variable
 from torch.utils.data import DataLoader
 
 from models.ecl import ECL_model, balanced_proxies
@@ -29,6 +27,9 @@ from utils.dataset.isic import (augmentation_rand, augmentation_sim,
 from utils.eval_metrics import Auc, ConfusionMatrix
 
 '''function for saving model'''
+
+cv2.setNumThreads(0)
+torch.set_num_threads(1)
 
 
 def model_snapshot(model, new_modelpath, old_modelpath=None, only_bestmodel=False):
@@ -83,20 +84,32 @@ def main(args):
     '''load dataset'''
     transfrom_train = [augmentation_rand, augmentation_sim]
     if args.dataset == 'ISIC2018':
-        train_iterator = DataLoader(isic2018_dataset(path=args.data_path, transform=transfrom_train, mode='train'),
-                                    batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=True)
-        valid_iterator = DataLoader(isic2018_dataset(path=args.data_path, transform=augmentation_test, mode='valid'),
-                                    batch_size=1, shuffle=False, num_workers=2)
-        test_iterator = DataLoader(isic2018_dataset(path=args.data_path, transform=augmentation_test, mode='test'),
-                                   batch_size=1, shuffle=False, num_workers=2)
+        train_iterator = DataLoader(
+            isic2018_dataset(path=args.data_path, transform=transfrom_train, mode='train'),
+            batch_size=args.batch_size, shuffle=True, num_workers=8, drop_last=True
+        )
+        valid_iterator = DataLoader(
+            isic2018_dataset(path=args.data_path, transform=augmentation_test, mode='valid'),
+            batch_size=1, shuffle=False, num_workers=4
+        )
+        test_iterator = DataLoader(
+            isic2018_dataset(path=args.data_path, transform=augmentation_test, mode='test'),
+            batch_size=1, shuffle=False, num_workers=4
+        )
 
     elif args.dataset == 'ISIC2019':
-        train_iterator = DataLoader(isic2019_dataset(path=args.data_path, transform=transfrom_train, mode='train'),
-                                    batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=True)
-        valid_iterator = DataLoader(isic2019_dataset(path=args.data_path, transform=augmentation_test, mode='valid'),
-                                    batch_size=1, shuffle=False, num_workers=2)
-        test_iterator = DataLoader(isic2019_dataset(path=args.data_path, transform=augmentation_test, mode='test'),
-                                   batch_size=1, shuffle=False, num_workers=2)
+        train_iterator = DataLoader(
+            isic2019_dataset(path=args.data_path, transform=transfrom_train, mode='train'),
+            batch_size=args.batch_size, shuffle=True, num_workers=8, drop_last=True
+        )
+        valid_iterator = DataLoader(
+            isic2019_dataset(path=args.data_path, transform=augmentation_test, mode='valid'),
+            batch_size=1, shuffle=False, num_workers=4
+        )
+        test_iterator = DataLoader(
+            isic2019_dataset(path=args.data_path, transform=augmentation_test, mode='test'),
+            batch_size=1, shuffle=False, num_workers=4
+        )
     else:
         raise ValueError("dataset error")
 
@@ -109,7 +122,6 @@ def main(args):
     # cosine lr
     lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * len(train_iterator))
     lr_scheduler_proxies = optim.lr_scheduler.CosineAnnealingLR(optimizer_proxies, T_max=args.epochs)
-
     # lr_scheduler = optim.lr_scheduler.OneCycleLR(
     #     optimizer,
     #     max_lr=args.lr,
@@ -122,6 +134,7 @@ def main(args):
     #     total_steps=len(train_iterator) * args.epochs,
     #     pct_start=0.05,
     # )
+
     '''load loss'''
     criterion_ce = CE_weight(cls_num_list=args.cls_num_list, E1=args.E1, E2=args.E2, E=args.epochs)
     criterion_bhp = BHP(cls_num_list=args.cls_num_list, proxy_num_list=proxy_num_list)
@@ -138,8 +151,8 @@ def main(args):
         for e in range(args.epochs):
             model.train()
             model_proxy.train()
-            print('Epoch:{}'.format(e))
-            print('Epoch:{}'.format(e), file=log_file)
+            print('Epoch: {}'.format(e))
+            print('Epoch: {}'.format(e), file=log_file)
 
             start_time_epoch = time.time()
             train_loss = 0.0
@@ -156,15 +169,19 @@ def main(args):
 
                 optimizer.zero_grad()
 
-                output, feat_mlp = model(data)
-                output_proxy = model_proxy()
+                with torch.autocast(
+                    device_type="cuda" if args.cuda else "cpu",
+                    dtype=torch.bfloat16 if args.bf16 else torch.float32,
+                ):
+                    breakpoint()
+                    output, feat_mlp = model(data)
+                    output_proxy = model_proxy()
+                    feat_mlp = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)
+                    loss_ce = criterion_ce(output, diagnosis_label, (e + 1), f_score_list)
+                    loss_bhp = criterion_bhp(output_proxy, feat_mlp, diagnosis_label)
+                    loss = alpha * loss_ce + beta * loss_bhp
 
-                feat_mlp = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)
-                loss_ce = criterion_ce(output, diagnosis_label, (e + 1), f_score_list)
-                loss_bhp = criterion_bhp(output_proxy, feat_mlp, diagnosis_label)
-                loss = alpha * loss_ce + beta * loss_bhp
                 loss.backward()
-
                 optimizer.step()
                 lr_scheduler.step()
 
@@ -275,41 +292,6 @@ def main(args):
         log_file.close()
 
 
-parser = argparse.ArgumentParser(description='Training for the classification task')
-
-# dataset
-parser.add_argument('--data_path', type=str, default='/media/disk/zyl/data/ISIC_CL/ISIC2018/',
-                    help='the path of the data')
-parser.add_argument('--dataset', type=str, default='ISIC2018',
-                    choices=['ISIC2018', 'ISIC2019'], help='the name of the dataset')
-parser.add_argument('--model_path', type=str,
-                    default="/media/disk/zyl/Experiment/ISIC_CL/ISIC2018/test_git/", help='the path of the model')
-parser.add_argument('--log_path', type=str, default=None, help='the path of the log')
-
-
-# training parameters
-parser.add_argument('--batch_size', type=int, default=64, help='batch size')
-parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
-parser.add_argument('--lr', type=float, default=0.002, help='learning rate')
-parser.add_argument('--weight_decay', type=float, default=0.0001, help='weight decay')
-parser.add_argument('--patience', type=int, default=100, help='patience for early stopping')
-parser.add_argument('--cuda', type=bool, default=True, help='whether to use cuda')
-parser.add_argument('--seed', type=int, default=1, help='random seed')
-parser.add_argument('--gpu', type=str, default='1', help='gpu device ids for CUDA_VISIBLE_DEVICES')
-
-
-# loss weights
-parser.add_argument('--alpha', type=float, default=2.0,
-                    choices=[0.5, 1.0, 2.0], help='weight of the cross entropy loss')
-parser.add_argument('--beta', type=float, default=1.0, choices=[0.5, 1.0, 2.0], help='weight of the BHP loss')
-# hyperparameters for ce loss
-parser.add_argument('--E1', type=int, default=20, choices=[20, 30, 40], help='hyperparameter for ce loss')
-parser.add_argument('--E2', type=int, default=50, choices=[50, 60, 70], help='hyperparameter for ce loss')
-
-# hyperparameters for model
-parser.add_argument('--feat_dim', dest='feat_dim', type=int, default=128)
-
-
 def _seed_torch(args):
     r"""
     Sets custom seed for torch
@@ -334,8 +316,44 @@ def _seed_torch(args):
             torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
         else:
             raise EnvironmentError("GPU device not found")
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = True
+
+
+parser = argparse.ArgumentParser(description='Training for the classification task')
+
+# dataset
+parser.add_argument('--data_path', type=str, default='/media/disk/zyl/data/ISIC_CL/ISIC2018/',
+                    help='the path of the data')
+parser.add_argument('--dataset', type=str, default='ISIC2018',
+                    choices=['ISIC2018', 'ISIC2019'], help='the name of the dataset')
+parser.add_argument('--model_path', type=str,
+                    default="/media/disk/zyl/Experiment/ISIC_CL/ISIC2018/test_git/", help='the path of the model')
+parser.add_argument('--log_path', type=str, default=None, help='the path of the log')
+
+
+# training parameters
+parser.add_argument('--batch_size', type=int, default=64, help='batch size')
+parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
+parser.add_argument('--lr', type=float, default=0.002, help='learning rate')
+parser.add_argument('--weight_decay', type=float, default=0.0001, help='weight decay')
+parser.add_argument('--patience', type=int, default=100, help='patience for early stopping')
+parser.add_argument('--cuda', type=bool, default=True, help='whether to use cuda')
+parser.add_argument('--bf16', type=bool, default=False, help='whether to use cuda')
+parser.add_argument('--seed', type=int, default=1, help='random seed')
+parser.add_argument('--gpu', type=str, default='1', help='gpu device ids for CUDA_VISIBLE_DEVICES')
+
+
+# loss weights
+parser.add_argument('--alpha', type=float, default=2.0,
+                    choices=[0.5, 1.0, 2.0], help='weight of the cross entropy loss')
+parser.add_argument('--beta', type=float, default=1.0, choices=[0.5, 1.0, 2.0], help='weight of the BHP loss')
+# hyperparameters for ce loss
+parser.add_argument('--E1', type=int, default=20, choices=[20, 30, 40], help='hyperparameter for ce loss')
+parser.add_argument('--E2', type=int, default=50, choices=[50, 60, 70], help='hyperparameter for ce loss')
+
+# hyperparameters for model
+parser.add_argument('--feat_dim', dest='feat_dim', type=int, default=128)
 
 
 if __name__ == '__main__':
