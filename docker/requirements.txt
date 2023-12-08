@@ -6,3 +6,4 @@ numpy
 prettytable
 scikit-learn
 ipython
+gdown
