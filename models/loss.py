@@ -53,6 +53,8 @@ class CE_weight(nn.Module):
 
         else:
             with torch.no_grad():
+                if isinstance(f1_score, list):
+                    f1_score = torch.tensor(f1_score)
                 f1_score = f1_score.type_as(x)
                 weight = 1.0 / f1_score
                 self.weight = (weight / weight.sum()) * len(self.cls_num_list)
