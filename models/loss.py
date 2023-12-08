@@ -45,18 +45,20 @@ class CE_weight(nn.Module):
             return F.cross_entropy(x, target)
 
         if e > self.E1 and e <= self.E2:
-            now_power = (e - self.E1) / (self.E2 - self.E1)
-            per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
-            per_cls_weights = torch.tensor(per_cls_weights, device=target.device)
+            with torch.no_grad():
+                now_power = (e - self.E1) / (self.E2 - self.E1)
+                per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
+                per_cls_weights = torch.tensor(per_cls_weights, device=target.device)
             return F.cross_entropy(x, target, weight=per_cls_weights)
 
         else:
-            f1_score = torch.tensor(f1_score).type_as(x)
-            weight = torch.tensor(1.0 / f1_score).type_as(x)
-            self.weight = (weight / weight.sum()) * len(self.cls_num_list)
-            now_power = (e - self.E2) / (self.E - self.E2)
-            per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
-            per_cls_weights = torch.tensor(per_cls_weights).type_as(x)
+            with torch.no_grad():
+                f1_score = f1_score.type_as(x)
+                weight = 1.0 / f1_score
+                self.weight = (weight / weight.sum()) * len(self.cls_num_list)
+                now_power = (e - self.E2) / (self.E - self.E2)
+                per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
+                per_cls_weights = torch.tensor(per_cls_weights).type_as(x)
             return F.cross_entropy(x, target, weight=per_cls_weights)
 
 

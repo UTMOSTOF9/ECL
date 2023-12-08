@@ -12,11 +12,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 
+
 class balanced_proxies(nn.Module):
-    def __init__(self, dim,proxy_num = 3):
+    def __init__(self, dim, proxy_num=3):
         super(balanced_proxies, self).__init__()
         protos = torch.nn.Parameter(torch.empty([proxy_num, dim]))
-        self.proxies = torch.nn.init.xavier_uniform_(protos, gain=1)
+        torch.nn.init.xavier_uniform_(protos, gain=1)
+        self.proxies = protos
 
     def forward(self):
         centers = F.normalize(self.proxies, dim=-1)
@@ -24,7 +26,7 @@ class balanced_proxies(nn.Module):
 
 
 class ECL_model(nn.Module):
-    def __init__(self,num_classes=8,feat_dim=512):
+    def __init__(self, num_classes=8, feat_dim=512):
         super(ECL_model, self).__init__()
         cnns = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
         self.backbone = torch.nn.Sequential(*(list(cnns.children())[:-1]))
@@ -40,12 +42,12 @@ class ECL_model(nn.Module):
             nn.Linear(feat_dim, feat_dim)
         )
 
-        self.fc = nn.Linear(dimension,self.num_classes)
+        self.fc = nn.Linear(dimension, self.num_classes)
 
-    def forward(self,x):
+    def forward(self, x):
         if isinstance(x, list):
             feat1 = self.backbone(x[0])
-            feat1 = feat1.view(feat1.shape[0],-1)
+            feat1 = feat1.view(feat1.shape[0], -1)
             feat1_mlp = F.normalize(self.head(feat1))
             logits = self.fc(feat1)
 
@@ -53,7 +55,7 @@ class ECL_model(nn.Module):
             feat2 = feat2.view(feat2.shape[0], -1)
             feat2_mlp = F.normalize(self.head(feat2))
 
-            return logits,[feat1_mlp,feat2_mlp]
+            return logits, [feat1_mlp, feat2_mlp]
 
         else:
             feat1 = self.backbone(x)
