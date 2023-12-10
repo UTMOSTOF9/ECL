@@ -13,6 +13,8 @@ import os
 import time
 from pathlib import Path
 
+import glob
+from IPython.display import clear_output
 import numpy as np
 import torch
 import torch.nn as nn
@@ -20,6 +22,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
+from torchvision import transforms
 
 from models.ecl import ECL_model, balanced_proxies
 from models.loss import BHP, CE_weight
@@ -100,38 +103,24 @@ def main(args):
     else:
         raise ValueError("dataset error")
 
-    '''load optimizer'''
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
+    '''load optimizer--> 随机梯度下降的优化器'''
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9) 
     optimizer_proxies = optim.SGD(model_proxy.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
-    # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, )
-    # optimizer_proxies = optim.AdamW(model_proxy.parameters(), lr=args.lr, weight_decay=args.weight_decay, )
 
-    # cosine lr
+    # cosine lr -->余弦退火lr调度器，会在训练过程中调整learning rate
     lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * len(train_iterator))
     lr_scheduler_proxies = optim.lr_scheduler.CosineAnnealingLR(optimizer_proxies, T_max=args.epochs)
 
-    # lr_scheduler = optim.lr_scheduler.OneCycleLR(
-    #     optimizer,
-    #     max_lr=args.lr,
-    #     total_steps=len(train_iterator) * args.epochs,
-    #     pct_start=0.05,
-    # )
-    # lr_scheduler_proxies = optim.lr_scheduler.OneCycleLR(
-    #     optimizer,
-    #     max_lr=args.lr,
-    #     total_steps=len(train_iterator) * args.epochs,
-    #     pct_start=0.05,
-    # )
-    '''load loss'''
+    '''load loss-->创建两个loss function'''
     criterion_ce = CE_weight(cls_num_list=args.cls_num_list, E1=args.E1, E2=args.E2, E=args.epochs)
     criterion_bhp = BHP(cls_num_list=args.cls_num_list, proxy_num_list=proxy_num_list)
     alpha = args.alpha
     beta = args.beta
 
     '''train'''
-    f_score_list = [1.0 for _ in range(args.num_classes)]
-    best_acc = 0.0
-    old_model_path = None
+    f_score_list = [1.0 for _ in range(args.num_classes)]  #每个class的F1-score都初始化为1.0
+    best_acc = 0.0  #记录best accuarcy，初始化为0
+    old_model_path = None  
     curr_patience = args.patience
     start_time = time.time()
     try:
@@ -144,34 +133,35 @@ def main(args):
             start_time_epoch = time.time()
             train_loss = 0.0
 
-            optimizer_proxies.zero_grad()
+            optimizer_proxies.zero_grad()  #清除之前的梯度，初始化
 
             for batch_index, (data, label) in enumerate(train_iterator):
 
                 if args.cuda:
                     for i in range(len(data)):
+                        #print("pp's data:",data[i])
                         data[i] = data[i].cuda()
                     label = label.cuda()
                 diagnosis_label = label.squeeze(1)
 
                 optimizer.zero_grad()
 
-                output, feat_mlp = model(data)
-                output_proxy = model_proxy()
+                output, feat_mlp = model(data)  #预测的feature和两个特征向量
+                output_proxy = model_proxy()  
 
-                feat_mlp = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)
-                loss_ce = criterion_ce(output, diagnosis_label, (e + 1), f_score_list)
-                loss_bhp = criterion_bhp(output_proxy, feat_mlp, diagnosis_label)
-                loss = alpha * loss_ce + beta * loss_bhp
-                loss.backward()
+                feat_mlp = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)#两个feature concate在一起
+                loss_ce = criterion_ce(output, diagnosis_label, (e + 1), f_score_list) #cross entropy loss计算
+                loss_bhp = criterion_bhp(output_proxy, feat_mlp, diagnosis_label)  #bhp loss计算
+                loss = alpha * loss_ce + beta * loss_bhp #总的loss计算
+                loss.backward() #计算梯度
 
-                optimizer.step()
-                lr_scheduler.step()
+                optimizer.step()  #更新model的权重
+                lr_scheduler.step()  #调整learning rate
 
-                train_loss += loss.item()
+                train_loss += loss.item()  
 
-                if batch_index % 50 == 0 and batch_index != 0:
-                    predicted_results = torch.argmax(output, dim=1)
+                if batch_index % 50 == 0 and batch_index != 0:  
+                    predicted_results = torch.argmax(output, dim=1) 
                     correct_num = (predicted_results.cpu() == diagnosis_label.cpu()).sum().item()
                     acc = correct_num / len(diagnosis_label)
                     print('Training epoch: {} [{}/{}], Loss: {:.4f}, Accuracy: {:.4f}, Learning rate: {}'.format(e,
@@ -187,27 +177,27 @@ def main(args):
                 e, train_loss / len(train_iterator)), file=log_file)
 
             '''validation'''
-            model.eval()
+            model.eval()   #设置为评估模式
             model_proxy.eval()
-            pro_diag, lab_diag = [], []
-            val_confusion_diag = ConfusionMatrix(num_classes=args.num_classes, labels=list(range(args.num_classes)))
+            pro_diag, lab_diag = [], []  
+            val_confusion_diag = ConfusionMatrix(num_classes=args.num_classes, labels=list(range(args.num_classes))) #初始化混淆矩阵
             with torch.no_grad():
-                for batch_index, (data, label) in enumerate(valid_iterator):
+                for batch_index, (data, label) in enumerate(valid_iterator):  #遍历验证集
                     if args.cuda:
                         data = data.cuda()
                         label = label.cuda()
                     diagnosis_label = label.squeeze(1)
 
-                    output = model(data)
-                    predicted_results = torch.argmax(output, dim=1)
+                    output = model(data)  #对数据进行预测
+                    predicted_results = torch.argmax(output, dim=1)   
                     pro_diag.extend(output.detach().cpu().numpy())
                     lab_diag.extend(diagnosis_label.cpu().numpy())
 
                     val_confusion_diag.update(predicted_results.cpu().numpy(), diagnosis_label.cpu().numpy())
 
-                dia_acc = val_confusion_diag.summary(log_file)
-                Auc(pro_diag, lab_diag, args.num_classes, log_file)
-                f_score_list = val_confusion_diag.get_f1score()
+                dia_acc = val_confusion_diag.summary(log_file) #利用混淆矩阵计算正确率acc
+                Auc(pro_diag, lab_diag, args.num_classes, log_file) #计算AUC
+                f_score_list = val_confusion_diag.get_f1score() #计算F1
 
                 end_time_epoch = time.time()
                 training_time_epoch = end_time_epoch - start_time_epoch
@@ -241,7 +231,7 @@ def main(args):
 
         '''test'''
         if complete:
-            model.load_state_dict(torch.load(old_model_path), strict=True)
+            model.load_state_dict(torch.load(old_model_path), strict=True)  #加载保存的best model
             model.eval()
 
             pro_diag, lab_diag = [], []
@@ -254,7 +244,7 @@ def main(args):
                     diagnosis_label = label.squeeze(1)
 
                     output = model(data)
-                    predicted_results = torch.argmax(output, dim=1)
+                    predicted_results = torch.argmax(output, dim=1) #预测的类别
                     pro_diag.extend(output.detach().cpu().numpy())
                     lab_diag.extend(diagnosis_label.cpu().numpy())
 
@@ -265,7 +255,7 @@ def main(args):
                 confusion_diag.summary(log_file)
                 print("Test AUC:")
                 print("Test AUC:", file=log_file)
-                Auc(pro_diag, lab_diag, args.num_classes, log_file)
+                Auc(pro_diag, lab_diag, args.num_classes, log_file)  #计算AUC分数
 
     except Exception:
         import traceback
@@ -341,7 +331,7 @@ def _seed_torch(args):
 if __name__ == '__main__':
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-    _seed_torch(args)
+    _seed_torch(args)  #给所有可用的环境内的seed进行设定
     if args.dataset == 'ISIC2018':
         args.cls_num_list = [84, 195, 69, 4023, 308, 659, 667]
         args.num_classes = 7

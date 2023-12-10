@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+ 
 
 class CE_weight(nn.Module):
     '''
@@ -24,7 +24,7 @@ class CE_weight(nn.Module):
         self.register_buffer('cls_num_list', cls_num_list)
 
         # weight of each class for imbalance dataset
-        weight = 1.0 / cls_num_list
+        weight = 1.0 / cls_num_list   #用每个class的样本数的倒数作为初始权重值
         weight = (weight / weight.sum()) * len(cls_num_list)
         self.register_buffer('weight', weight)
 
@@ -42,7 +42,7 @@ class CE_weight(nn.Module):
         :return: loss
         '''
         if e <= self.E1:
-            return F.cross_entropy(x, target)
+            return F.cross_entropy(x, target)  #使用普通的cross entropy
 
         if e > self.E1 and e <= self.E2:
             now_power = (e - self.E1) / (self.E2 - self.E1)
@@ -58,7 +58,6 @@ class CE_weight(nn.Module):
             per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
             per_cls_weights = torch.tensor(per_cls_weights).type_as(x)
             return F.cross_entropy(x, target, weight=per_cls_weights)
-
 
 class BHP(nn.Module):
     '''
@@ -115,16 +114,24 @@ class BHP(nn.Module):
         logits = logits - logits_max.detach()
 
         # class averaging
+        total = sum(self.cls_num_list) #pp
+        same_div_diff=[(total-x) / x for x in self.cls_num_list] #pp
         exp_logits = torch.exp(logits) * logits_mask
         per_ins_weight = torch.tensor([batch_cls_count[i] for i in targets], device=device).view(1, -1).expand(
             2 * batch_size + int(np.array(self.proxy_num_list).sum()), 2 * batch_size + int(np.array(self.proxy_num_list).sum())) - mask
+        
         exp_logits_sum = exp_logits.div(per_ins_weight).sum(dim=1, keepdim=True)
 
         # get loss
         log_prob = logits - torch.log(exp_logits_sum)
+        """for i in range(log_prob.shape[0]):     #pp
+            label_num=int(targets[i])
+            log_prob[i, :] *= log_prob[label_num]"""
         mean_log_prob_pos = (mask * log_prob).sum(1) / (mask.sum(1) + 1e-7)
 
         loss = - mean_log_prob_pos
         loss = loss.mean()
 
         return loss
+    
+

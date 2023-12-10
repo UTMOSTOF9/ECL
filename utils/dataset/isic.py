@@ -6,13 +6,16 @@
 @contact:zhangyilan@buaa.edu.cn
 @time:2023/7/8 17:33
 '''
-
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
 import os
 import pandas as pd
 from torch.utils.data import Dataset
 from PIL import Image
 from torchvision import transforms
 import torch
+import skimage  #加高斯noise
 
 augmentation_rand = transforms.Compose(
     [transforms.Resize((224,224)),
@@ -107,6 +110,10 @@ class isic2018_dataset(Dataset):
 
         if self.transform is not None:
             if self.mode == 'train':
+                img_array = np.array(img)  # 将 PIL 图像转换为 NumPy 数组
+                noisy_img_array  = skimage.util.random_noise(img_array, mode='gaussian', var=0.01)  #加高斯noise
+                # 将 NumPy 数组转换回 PIL 图像（如果需要）
+                img = Image.fromarray((noisy_img_array * 255).astype(np.uint8))
                 img1 = self.transform[0](img)
                 img2 = self.transform[1](img)
 
