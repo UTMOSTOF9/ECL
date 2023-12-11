@@ -4,5 +4,7 @@ ipython --pdb -- train.py --dataset ISIC2018 \
     --lr 0.002 \
     --epochs 100 \
     --gpu 0 \
+    --backbone ResNet50 \
     --bf16 True \
-    --model_path ./results/ISIC2018/
+    --exp_name ecl-clip-ar \
+    --model_path ./results/ISIC2018_ecl-clip-ar/

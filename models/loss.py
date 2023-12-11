@@ -19,7 +19,7 @@ class CE_weight(nn.Module):
     '''
 
     def __init__(self, cls_num_list, E1=20, E2=50, E=100):
-        super(CE_weight, self).__init__()
+        super().__init__()
         cls_num_list = torch.tensor(cls_num_list)
         self.register_buffer('cls_num_list', cls_num_list)
 
@@ -48,19 +48,20 @@ class CE_weight(nn.Module):
             with torch.no_grad():
                 now_power = (e - self.E1) / (self.E2 - self.E1)
                 per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
-                per_cls_weights = torch.tensor(per_cls_weights, device=target.device)
+                per_cls_weights = torch.tensor(per_cls_weights, device=x.device, dtype=x.dtype)
             return F.cross_entropy(x, target, weight=per_cls_weights)
 
         else:
             with torch.no_grad():
                 if isinstance(f1_score, list):
-                    f1_score = torch.tensor(f1_score)
-                f1_score = f1_score.type_as(x)
+                    f1_score = torch.tensor(f1_score, device=x.device, dtype=x.dtype)
+                else:
+                    f1_score = f1_score.type_as(x)
                 weight = 1.0 / f1_score
                 self.weight = (weight / weight.sum()) * len(self.cls_num_list)
                 now_power = (e - self.E2) / (self.E - self.E2)
                 per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
-                per_cls_weights = torch.tensor(per_cls_weights).type_as(x)
+                per_cls_weights = torch.tensor(per_cls_weights, device=x.device, dtype=x.dtype)
             return F.cross_entropy(x, target, weight=per_cls_weights)
 
 
@@ -70,10 +71,10 @@ class BHP(nn.Module):
     '''
 
     def __init__(self, cls_num_list=None, proxy_num_list=None, temperature=0.1,):
-        super(BHP, self).__init__()
+        super().__init__()
         self.temperature = temperature
         self.cls_num_list = cls_num_list
-        self.proxy_num_list = proxy_num_list
+        self.proxy_num_list = np.array(proxy_num_list)
 
     def forward(self, proxy, features, targets):
         '''
@@ -88,12 +89,11 @@ class BHP(nn.Module):
         targets = targets.contiguous().view(-1, 1)
 
         # get proxy labels
-        targets_proxy = torch.empty((0, 1), dtype=torch.int64)
-        for i, num in enumerate(self.proxy_num_list):
-            tmp_targets = torch.full([num, 1], i)
-            targets_proxy = torch.cat((targets_proxy, tmp_targets), dim=0)
-
-        targets_proxy = targets_proxy.view(-1, 1).to(device)
+        targets_proxy = [
+            torch.full([num, 1], i, dtype=torch.int64, device=device)
+            for i, num in enumerate(self.proxy_num_list)
+        ]
+        targets_proxy = torch.cat(targets_proxy, dim=0)
 
         # get labels of features and proxies
         targets = torch.cat([targets.repeat(2, 1), targets_proxy], dim=0)
@@ -120,7 +120,8 @@ class BHP(nn.Module):
 
         # class averaging
         exp_logits = torch.exp(logits) * logits_mask
-        per_ins_weight = torch.tensor([batch_cls_count[i] for i in targets], device=device).view(1, -1).expand(
+        per_ins_weight = torch.tensor([batch_cls_count[i] for i in targets], device=device).view(1, -1)
+        per_ins_weight = per_ins_weight.expand(
             2 * batch_size + int(np.array(self.proxy_num_list).sum()), 2 * batch_size + int(np.array(self.proxy_num_list).sum())) - mask
         exp_logits_sum = exp_logits.div(per_ins_weight).sum(dim=1, keepdim=True)
 
