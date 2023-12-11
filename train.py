@@ -187,7 +187,6 @@ def main(args):
                         data = data.cuda()
                         label = label.cuda()
                     diagnosis_label = label.squeeze(1)
-
                     output = model(data)  #对数据进行预测
                     predicted_results = torch.argmax(output, dim=1)   
                     pro_diag.extend(output.detach().cpu().numpy())

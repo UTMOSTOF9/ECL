@@ -1,4 +1,4 @@
-ipython --pdb -- train.py --dataset ISIC2019 \
+python train.py --dataset ISIC2019 \
     --data_path ./data/ISIC2019/ \
     --batch_size 64 \
     --lr 0.002 \

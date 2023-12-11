@@ -15,7 +15,7 @@ from torch.utils.data import Dataset
 from PIL import Image
 from torchvision import transforms
 import torch
-import skimage  #加高斯noise
+#import skimage  #加高斯noise
 
 augmentation_rand = transforms.Compose(
     [transforms.Resize((224,224)),
@@ -42,7 +42,7 @@ augmentation_sim = transforms.Compose(
 
 
 augmentation_test = transforms.Compose([
-        transforms.Resize(224),
+        transforms.Resize((224,224)),   #pp modify
         transforms.ToTensor(),
         # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
         # transforms.Normalize((0.466, 0.471, 0.380), (0.195, 0.194, 0.192))
@@ -110,10 +110,9 @@ class isic2018_dataset(Dataset):
 
         if self.transform is not None:
             if self.mode == 'train':
-                img_array = np.array(img)  # 将 PIL 图像转换为 NumPy 数组
-                noisy_img_array  = skimage.util.random_noise(img_array, mode='gaussian', var=0.01)  #加高斯noise
-                # 将 NumPy 数组转换回 PIL 图像（如果需要）
-                img = Image.fromarray((noisy_img_array * 255).astype(np.uint8))
+                #img_array = np.array(img)  # 将 PIL 图像转换为 NumPy 数组
+                #noisy_img_array  = skimage.util.random_noise(img_array, mode='gaussian', var=0.01)  #加高斯noise
+                #img = Image.fromarray((noisy_img_array * 255).astype(np.uint8)) # 将 NumPy 数组转换回 PIL 图像（如果需要）
                 img1 = self.transform[0](img)
                 img2 = self.transform[1](img)
 
