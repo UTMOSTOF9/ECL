@@ -16,10 +16,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.optim as optim
+import wandb
+from torch.nn.functional import interpolate
 from torch.utils.data import DataLoader
 
-from models.ecl import ECL_model, balanced_proxies
+from models.ecl import balanced_proxies, build_model
 from models.loss import BHP, CE_weight
 from utils.dataset.isic import (augmentation_rand, augmentation_sim,
                                 augmentation_test, isic2018_dataset,
@@ -55,6 +58,14 @@ def get_proxies_num(cls_num_list):
 
 
 def main(args):
+
+    wandb.init(
+        project="cvpdl-final",
+        name=args.exp_name,
+        dir=args.log_path,
+        config=vars(args),
+    )
+
     Path(args.log_path).mkdir(parents=True, exist_ok=True)
     log_file = open(os.path.join(args.log_path, 'train_log.txt'), 'w')
 
@@ -64,7 +75,7 @@ def main(args):
         print(arg, getattr(args, arg), file=log_file)
 
     '''load models'''
-    model = ECL_model(num_classes=args.num_classes, feat_dim=args.feat_dim)
+    model = build_model(name=args.backbone, num_classes=args.num_classes, feat_dim=args.feat_dim)
     proxy_num_list = get_proxies_num(args.cls_num_list)
     model_proxy = balanced_proxies(dim=args.feat_dim, proxy_num=sum(proxy_num_list))
 
@@ -116,28 +127,15 @@ def main(args):
     '''load optimizer'''
     optimizer = optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
     optimizer_proxies = optim.SGD(model_proxy.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
-    # optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, )
-    # optimizer_proxies = optim.AdamW(model_proxy.parameters(), lr=args.lr, weight_decay=args.weight_decay, )
 
     # cosine lr
     lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * len(train_iterator))
     lr_scheduler_proxies = optim.lr_scheduler.CosineAnnealingLR(optimizer_proxies, T_max=args.epochs)
-    # lr_scheduler = optim.lr_scheduler.OneCycleLR(
-    #     optimizer,
-    #     max_lr=args.lr,
-    #     total_steps=len(train_iterator) * args.epochs,
-    #     pct_start=0.05,
-    # )
-    # lr_scheduler_proxies = optim.lr_scheduler.OneCycleLR(
-    #     optimizer,
-    #     max_lr=args.lr,
-    #     total_steps=len(train_iterator) * args.epochs,
-    #     pct_start=0.05,
-    # )
 
     '''load loss'''
     criterion_ce = CE_weight(cls_num_list=args.cls_num_list, E1=args.E1, E2=args.E2, E=args.epochs)
     criterion_bhp = BHP(cls_num_list=args.cls_num_list, proxy_num_list=proxy_num_list)
+    criterion_map = nn.L1Loss()
     alpha = args.alpha
     beta = args.beta
 
@@ -160,7 +158,6 @@ def main(args):
             optimizer_proxies.zero_grad()
 
             for batch_index, (data, label) in enumerate(train_iterator):
-
                 if args.cuda:
                     for i in range(len(data)):
                         data[i] = data[i].cuda()
@@ -173,13 +170,20 @@ def main(args):
                     device_type="cuda" if args.cuda else "cpu",
                     dtype=torch.bfloat16 if args.bf16 else torch.float32,
                 ):
-                    breakpoint()
-                    output, feat_mlp = model(data)
+                    output, feat_mlp, reconstruct_maps = model(data)
                     output_proxy = model_proxy()
                     feat_mlp = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)
                     loss_ce = criterion_ce(output, diagnosis_label, (e + 1), f_score_list)
                     loss_bhp = criterion_bhp(output_proxy, feat_mlp, diagnosis_label)
-                    loss = alpha * loss_ce + beta * loss_bhp
+
+                    with torch.no_grad():
+                        reconstruct_targets1 = interpolate(data[0], size=reconstruct_maps[0].shape[2:])
+                        reconstruct_targets2 = interpolate(data[1], size=reconstruct_maps[0].shape[2:])
+
+                    loss_map = criterion_map(reconstruct_maps[0], reconstruct_targets1)
+                    loss_map += criterion_map(reconstruct_maps[1], reconstruct_targets2)
+                    loss = alpha * loss_ce + beta * loss_bhp + beta * loss_map
+                    wandb.log({"loss": loss, "loss_ce": loss_ce, "loss_bhp": loss_bhp, "loss_map": loss_map})
 
                 loss.backward()
                 optimizer.step()
@@ -191,19 +195,24 @@ def main(args):
                     predicted_results = torch.argmax(output, dim=1)
                     correct_num = (predicted_results.cpu() == diagnosis_label.cpu()).sum().item()
                     acc = correct_num / len(diagnosis_label)
-                    print('Training epoch: {} [{}/{}], Loss: {:.4f}, Accuracy: {:.4f}, Learning rate: {}'.format(e,
-                                                                                                                 batch_index * args.batch_size, len(train_iterator.dataset), loss.item(), acc, optimizer.param_groups[0]['lr']))
-                    print('Training epoch: {} [{}/{}], Loss: {:.4f}, Accuracy: {:.4f}, Learning rate: {}'.format(e,
-                                                                                                                 batch_index * args.batch_size, len(train_iterator.dataset), loss.item(), acc, optimizer.param_groups[0]['lr']), file=log_file)
+                    lr = optimizer.param_groups[0]["lr"]
+                    train_log = (
+                        f'Training epoch: {e} [{batch_index * args.batch_size}/{len(train_iterator.dataset)}], '
+                        f'Loss: {loss.item():.4f}, Accuracy: {acc:.4f}, '
+                        f'Learning rate: {lr:.6f}'
+                    )
+                    wandb.log({"lr": lr})
+                    print(train_log)
+                    print(train_log, file=log_file)
 
             optimizer_proxies.step()
             lr_scheduler_proxies.step()
 
-            print("Epoch {} complete! Average Training loss: {:.4f}".format(e, train_loss / len(train_iterator)))
-            print("Epoch {} complete! Average Training loss: {:.4f}".format(
-                e, train_loss / len(train_iterator)), file=log_file)
+            train_epoch_log = f"Epoch {e} complete! Average Training loss: {train_loss / len(train_iterator):.4f}"
+            print(train_epoch_log)
+            print(train_epoch_log, file=log_file)
 
-            '''validation'''
+            # Validation
             model.eval()
             model_proxy.eval()
             pro_diag, lab_diag = [], []
@@ -223,17 +232,21 @@ def main(args):
                     val_confusion_diag.update(predicted_results.cpu().numpy(), diagnosis_label.cpu().numpy())
 
                 dia_acc = val_confusion_diag.summary(log_file)
-                Auc(pro_diag, lab_diag, args.num_classes, log_file)
+                roc_auc = Auc(pro_diag, lab_diag, args.num_classes, log_file)
+                wandb.log({"val_acc": dia_acc, "val_auc": np.mean(roc_auc)})
                 f_score_list = val_confusion_diag.get_f1score()
 
                 end_time_epoch = time.time()
                 training_time_epoch = end_time_epoch - start_time_epoch
                 total_training_time = time.time() - start_time
                 remaining_time = training_time_epoch * args.epochs - total_training_time
-                print("Total training time: {:.4f}s, {:.4f} s/epoch, Estimated remaining time: {:.4f}s".format(
-                    total_training_time, training_time_epoch, remaining_time))
-                print("Total training time: {:.4f}s, {:.4f} s/epoch, Estimated remaining time: {:.4f}s".format(
-                    total_training_time, training_time_epoch, remaining_time), file=log_file)
+                val_log = (
+                    f"Total training time: {total_training_time:.4f}s, "
+                    f"{training_time_epoch:.4f} s/epoch, "
+                    f"Estimated remaining time: {remaining_time:.4f}s"
+                )
+                print(val_log)
+                print(val_log, file=log_file)
 
                 if dia_acc > best_acc:
                     curr_patience = args.patience
@@ -256,7 +269,7 @@ def main(args):
                     complete = True
             log_file.flush()
 
-        '''test'''
+        # Test
         if complete:
             model.load_state_dict(torch.load(old_model_path), strict=True)
             model.eval()
@@ -279,10 +292,12 @@ def main(args):
 
                 print("Test confusion matrix:")
                 print("Test confusion matrix:", file=log_file)
-                confusion_diag.summary(log_file)
+                test_acc = confusion_diag.summary(log_file)
                 print("Test AUC:")
                 print("Test AUC:", file=log_file)
-                Auc(pro_diag, lab_diag, args.num_classes, log_file)
+                roc_auc = Auc(pro_diag, lab_diag, args.num_classes, log_file)
+
+                wandb.log({"test_acc": test_acc, "test_auc": np.mean(roc_auc)})
 
     except Exception:
         import traceback
@@ -342,6 +357,9 @@ parser.add_argument('--cuda', type=bool, default=True, help='whether to use cuda
 parser.add_argument('--bf16', type=bool, default=False, help='whether to use cuda')
 parser.add_argument('--seed', type=int, default=1, help='random seed')
 parser.add_argument('--gpu', type=str, default='1', help='gpu device ids for CUDA_VISIBLE_DEVICES')
+parser.add_argument('--backbone', type=str, default='ResNet50', help='model name')
+
+parser.add_argument('--exp_name', type=str, default='', help='exp name')
 
 
 # loss weights
