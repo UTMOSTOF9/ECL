@@ -1,5 +1,5 @@
-ipython --pdb -- train.py --dataset ISIC2018 \
-    --data_path ./data/ISIC2018/ \
+ipython --pdb -- train.py --dataset ISIC2019 \
+    --data_path ./data/ISIC2019/ \
     --batch_size 64 \
     --lr 0.002 \
     --epochs 100 \
@@ -9,5 +9,5 @@ ipython --pdb -- train.py --dataset ISIC2018 \
     --alpha 0.1 \
     --beta 1 \
     --gamma 0.25 \
-    --exp_name ecl-clip-mssl-2018 \
-    --model_path ./results/ecl-clip-mssl-2018/
+    --exp_name ecl-clip-mssl-2019 \
+    --model_path ./results/ecl-clip-mssl-2019/
