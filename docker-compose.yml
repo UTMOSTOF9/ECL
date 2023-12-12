@@ -1,0 +1,17 @@
+version: "2.4"
+services:
+  lab:
+    image: shangfu/cuda11.3_cudnn8
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - DISPLAY=$DISPLAY
+    stdin_open: true
+    tty: true
+    volumes: 
+      - .:/root/code
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    ports:
+      - "5005:5005"
+    command: "nvidia-smi"
+    ipc: host

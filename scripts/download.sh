@@ -1,4 +1,5 @@
-mkdir ./data && cd ./data
+mkdir ./data
+cd ./data
 
 # download google drive file with id
 gdown 1bhcKPU2yeus4Kno9bI235anKj8wg9KTj

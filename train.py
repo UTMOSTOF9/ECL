@@ -171,26 +171,19 @@ def main(args):
                     device_type="cuda" if args.cuda else "cpu",
                     dtype=torch.bfloat16 if args.bf16 else torch.float16,
                 ):
-                    # output, feat_mlp, centers = model(data)
-                    # centers = centers[:args.num_classes]
-                    # features = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)
-                    # loss_scl = criterion_scl(centers, features, diagnosis_label)
-                    
                     output, feat_mlp, reconstruct_maps = model(data)
                     output_proxy = model_proxy()
                     feat_mlp = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)
                     loss_ce = criterion_ce(output, diagnosis_label, (e + 1), f_score_list)
                     loss_bhp = criterion_bhp(output_proxy, feat_mlp, diagnosis_label)
 
-                    # with torch.no_grad():
-                    #     reconstruct_targets1 = interpolate(data[0], size=reconstruct_maps[0].shape[2:])
-                    #     reconstruct_targets2 = interpolate(data[1], size=reconstruct_maps[0].shape[2:])
+                    with torch.no_grad():
+                        reconstruct_targets1 = interpolate(data[0], size=reconstruct_maps[0].shape[2:])
+                        reconstruct_targets2 = interpolate(data[1], size=reconstruct_maps[0].shape[2:])
                     
-                    # loss_map = criterion_map(reconstruct_maps[0], reconstruct_targets1)
-                    # loss_map += criterion_map(reconstruct_maps[1], reconstruct_targets2)
-                    # loss = alpha * loss_ce + beta * loss_bhp + beta * loss_map
-                    loss = alpha * loss_ce + beta * loss_bhp
-                    # loss = alpha * loss_ce
+                    loss_map = criterion_map(reconstruct_maps[0], reconstruct_targets1)
+                    loss_map += criterion_map(reconstruct_maps[1], reconstruct_targets2)
+                    loss = alpha * loss_ce + beta * loss_bhp + beta * loss_map
                     # wandb.log({"loss": loss, "loss_ce": loss_ce, "loss_bhp": loss_bhp, "loss_map": loss_map})
 
                 loss.backward()

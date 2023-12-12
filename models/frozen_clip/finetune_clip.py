@@ -136,7 +136,7 @@ class EVLTransformer(nn.Module):
         # B, C, H, W = x.shape
         
         features = backbone(x)[-self.decoder_num_layers:] # get features of last n layers 
-        print("features", features[0]['out'])
+        # print("features", features[0]['out'])
         x = self.decoder(features)
         # x = self.proj(x[:, 0, :])
         
