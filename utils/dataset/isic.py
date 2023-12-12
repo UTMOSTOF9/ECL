@@ -24,7 +24,8 @@ augmentation_rand = transforms.Compose(
         transforms.RandomApply([
             transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
         ], p=0.8),
-        transforms.ToTensor()
+        transforms.ToTensor(),
+        transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
     ]
     # transforms.Normalize((0.466, 0.471, 0.380), (0.195, 0.194, 0.192))]
 )
@@ -40,6 +41,7 @@ augmentation_sim = transforms.Compose(
         ], p=0.8),
         transforms.RandomGrayscale(p=0.2),
         transforms.ToTensor(),
+        transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
     ]
     # transforms.Normalize((0.466, 0.471, 0.380), (0.195, 0.194, 0.192))]
 )
@@ -48,6 +50,7 @@ augmentation_sim = transforms.Compose(
 augmentation_test = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
+    transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
     # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     # transforms.Normalize((0.466, 0.471, 0.380), (0.195, 0.194, 0.192))
 ])

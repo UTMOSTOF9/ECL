@@ -39,9 +39,11 @@ class ECL_model(nn.Module):
         self.backbone = create_feature_extractor(cnns, ['layer1', 'layer2', 'layer3', 'layer4', 'avgpool'])
         self.num_classes = num_classes
 
-        self.clip_feature_extractor = clip.load('ViT-B/32')[0].eval()
-        for param in self.clip_feature_extractor.parameters():
+        clip_feature_extractor, _ = clip.load('ViT-B/32')
+        for param in clip_feature_extractor.parameters():
             param.requires_grad = False
+
+        self.clip_feature_extractor = clip_feature_extractor.eval()
 
         dimension = 512*4
 
