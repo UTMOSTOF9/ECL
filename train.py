@@ -428,8 +428,12 @@ parser.add_argument('--exp_name', type=str, default='', help='exp name')
 
 
 # loss weights
-parser.add_argument('--alpha', type=float, default=2.0, choices=[0.25, 0.5, 1.0, 2.0], help='weight of the CE loss')
-parser.add_argument('--beta', type=float, default=1.0, choices=[0.25, 0.5, 1.0, 2.0], help='weight of the BHP loss')
+parser.add_argument('--alpha', type=float, default=2.0,
+                    choices=[0.1, 0.25, 0.5, 1.0, 2.0], help='weight of the CE loss')
+parser.add_argument('--beta', type=float, default=1.0,
+                    choices=[0, 0.1, 0.25, 0.5, 1.0, 2.0], help='weight of the BHP loss')
+parser.add_argument('--gamma', type=float, default=1.0,
+                    choices=[0, 0.1, 0.25, 0.5, 1.0, 2.0], help='weight of the MSSL loss')
 # hyperparameters for ce loss
 parser.add_argument('--E1', type=int, default=20, choices=[20, 30, 40], help='hyperparameter for ce loss')
 parser.add_argument('--E2', type=int, default=50, choices=[50, 60, 70], help='hyperparameter for ce loss')
