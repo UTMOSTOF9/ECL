@@ -17,6 +17,7 @@ from torchvision.models.feature_extraction import create_feature_extractor
 from torchvision.ops import FeaturePyramidNetwork
 
 from .cutout import Cutout
+from .frozen_clip.finetune_clip import EVLTransformer
 
 
 class balanced_proxies(nn.Module):
@@ -30,10 +31,104 @@ class balanced_proxies(nn.Module):
         centers = F.normalize(self.proxies, dim=-1)
         return centers
 
-
 class ECL_model(nn.Module):
     def __init__(self, num_classes=8, feat_dim=512):
         super(ECL_model, self).__init__()
+        cnns = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+        self.backbone = torch.nn.Sequential(*(list(cnns.children())[:-1]))
+
+        self.num_classes = num_classes
+
+        dimension = 512*4
+
+        self.head = nn.Sequential(
+            nn.Linear(dimension, feat_dim),
+            nn.BatchNorm1d(feat_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(feat_dim, feat_dim)
+        )
+
+        self.fc = nn.Linear(dimension,self.num_classes)
+
+    def forward(self,x):
+        if isinstance(x, list):
+            feat1 = self.backbone(x[0])
+            feat1 = feat1.view(feat1.shape[0],-1)
+            feat1_mlp = F.normalize(self.head(feat1))
+            logits = self.fc(feat1)
+
+            feat2 = self.backbone(x[1])
+            feat2 = feat2.view(feat2.shape[0], -1)
+            feat2_mlp = F.normalize(self.head(feat2))
+
+            return logits,[feat1_mlp,feat2_mlp], None
+
+        else:
+            feat1 = self.backbone(x)
+            feat1 = feat1.view(feat1.shape[0], -1)
+
+            logits = self.fc(feat1)
+
+            return logits
+
+
+class ECL_EVL_model(nn.Module):
+    def __init__(
+        self, 
+        num_classes:int=8, 
+        feat_dim:int=512, # 128
+        cls_dropout:float=0.5, 
+    ):
+        super(ECL_EVL_model, self).__init__()
+        self.backbone = EVLTransformer()
+        backbone_feature_dim = self.backbone.backbone_feature_dim # danger ops
+        
+        self.num_classes = num_classes
+        
+        self.head = nn.Sequential(
+            nn.LayerNorm(backbone_feature_dim),
+            nn.Linear(backbone_feature_dim, feat_dim),
+        )
+        
+        self.fc = nn.Sequential(
+            nn.LayerNorm(backbone_feature_dim),
+            nn.Dropout(cls_dropout),
+            nn.Linear(backbone_feature_dim, num_classes),
+        )
+        
+        # # self training
+        # self.fpn = FeaturePyramidNetwork([3, 3, 3, 3], 3)
+        # self.generate_head = nn.Conv2d(3, 3, 3, 1, 1)
+        # self.cutout = Cutout(1, 4, fill_value=0)
+
+    def forward(self, x):
+        if isinstance(x, list):
+            feat1 = self.backbone(x[0])
+            feat1_mlp = F.normalize(self.head(feat1))
+            logits = self.fc(feat1)
+
+            feat2 = self.backbone(x[1])
+            feat2_mlp = F.normalize(self.head(feat2))
+
+            # _, feats = self.backbone(self.cutout(x[0]))
+            # reconstruct_maps1 = self.generate_head(self.fpn(feats)['layer1'])
+            # _, feats = self.backbone(self.cutout(x[1]))
+            # reconstruct_maps2 = self.generate_head(self.fpn(feats)['layer1'])
+
+            # return logits, [feat1, feat2], [reconstruct_maps1, reconstruct_maps2]
+            return logits, [feat1_mlp, feat2_mlp], None
+
+        else:
+            feat1 = self.backbone(x)
+            # feat1_mlp = F.normalize(self.head(feat1))
+            logits = self.fc(feat1)
+
+            return logits
+
+
+class ECL_clip_model(nn.Module):
+    def __init__(self, num_classes=8, feat_dim=512):
+        super(ECL_clip_model, self).__init__()
         cnns = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
         self.backbone = create_feature_extractor(cnns, ['layer1', 'layer2', 'layer3', 'layer4', 'avgpool'])
         self.num_classes = num_classes
@@ -156,8 +251,10 @@ class ECL_swin_model(nn.Module):
 
 def build_model(name, **kwargs):
     if name == 'ResNet50':
-        return ECL_model(**kwargs)
+        return ECL_clip_model(**kwargs)
     elif name == 'SwinV2':
         return ECL_swin_model(**kwargs)
+    elif name == 'EVL':
+        return ECL_EVL_model(**kwargs)
     else:
         raise NotImplementedError

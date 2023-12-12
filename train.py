@@ -13,12 +13,12 @@ import os
 import time
 from pathlib import Path
 
-import cv2
+# import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import wandb
+# import wandb
 from torch.nn.functional import interpolate
 from torch.utils.data import DataLoader
 
@@ -31,7 +31,7 @@ from utils.eval_metrics import Auc, ConfusionMatrix
 
 '''function for saving model'''
 
-cv2.setNumThreads(0)
+# cv2.setNumThreads(0)
 torch.set_num_threads(1)
 
 
@@ -59,12 +59,12 @@ def get_proxies_num(cls_num_list):
 
 def main(args):
 
-    wandb.init(
-        project="cvpdl-final",
-        name=args.exp_name,
-        dir=args.log_path,
-        config=vars(args),
-    )
+    # wandb.init(
+    #     project="cvpdl-final",
+    #     name=args.exp_name,
+    #     dir=args.log_path,
+    #     config=vars(args),
+    # )
 
     Path(args.log_path).mkdir(parents=True, exist_ok=True)
     log_file = open(os.path.join(args.log_path, 'train_log.txt'), 'w')
@@ -136,6 +136,7 @@ def main(args):
     criterion_ce = CE_weight(cls_num_list=args.cls_num_list, E1=args.E1, E2=args.E2, E=args.epochs)
     criterion_bhp = BHP(cls_num_list=args.cls_num_list, proxy_num_list=proxy_num_list)
     criterion_map = nn.L1Loss()
+    
     alpha = args.alpha
     beta = args.beta
 
@@ -168,22 +169,29 @@ def main(args):
 
                 with torch.autocast(
                     device_type="cuda" if args.cuda else "cpu",
-                    dtype=torch.bfloat16 if args.bf16 else torch.float32,
+                    dtype=torch.bfloat16 if args.bf16 else torch.float16,
                 ):
+                    # output, feat_mlp, centers = model(data)
+                    # centers = centers[:args.num_classes]
+                    # features = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)
+                    # loss_scl = criterion_scl(centers, features, diagnosis_label)
+                    
                     output, feat_mlp, reconstruct_maps = model(data)
                     output_proxy = model_proxy()
                     feat_mlp = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)
                     loss_ce = criterion_ce(output, diagnosis_label, (e + 1), f_score_list)
                     loss_bhp = criterion_bhp(output_proxy, feat_mlp, diagnosis_label)
 
-                    with torch.no_grad():
-                        reconstruct_targets1 = interpolate(data[0], size=reconstruct_maps[0].shape[2:])
-                        reconstruct_targets2 = interpolate(data[1], size=reconstruct_maps[0].shape[2:])
-
-                    loss_map = criterion_map(reconstruct_maps[0], reconstruct_targets1)
-                    loss_map += criterion_map(reconstruct_maps[1], reconstruct_targets2)
-                    loss = alpha * loss_ce + beta * loss_bhp + beta * loss_map
-                    wandb.log({"loss": loss, "loss_ce": loss_ce, "loss_bhp": loss_bhp, "loss_map": loss_map})
+                    # with torch.no_grad():
+                    #     reconstruct_targets1 = interpolate(data[0], size=reconstruct_maps[0].shape[2:])
+                    #     reconstruct_targets2 = interpolate(data[1], size=reconstruct_maps[0].shape[2:])
+                    
+                    # loss_map = criterion_map(reconstruct_maps[0], reconstruct_targets1)
+                    # loss_map += criterion_map(reconstruct_maps[1], reconstruct_targets2)
+                    # loss = alpha * loss_ce + beta * loss_bhp + beta * loss_map
+                    loss = alpha * loss_ce + beta * loss_bhp
+                    # loss = alpha * loss_ce
+                    # wandb.log({"loss": loss, "loss_ce": loss_ce, "loss_bhp": loss_bhp, "loss_map": loss_map})
 
                 loss.backward()
                 optimizer.step()
@@ -201,7 +209,7 @@ def main(args):
                         f'Loss: {loss.item():.4f}, Accuracy: {acc:.4f}, '
                         f'Learning rate: {lr:.6f}'
                     )
-                    wandb.log({"lr": lr})
+                    # wandb.log({"lr": lr})
                     print(train_log)
                     print(train_log, file=log_file)
 
@@ -223,9 +231,13 @@ def main(args):
                         data = data.cuda()
                         label = label.cuda()
                     diagnosis_label = label.squeeze(1)
-
-                    output = model(data)
-                    predicted_results = torch.argmax(output, dim=1)
+                    
+                    with torch.autocast(
+                        device_type="cuda" if args.cuda else "cpu",
+                        dtype=torch.bfloat16 if args.bf16 else torch.float16,
+                    ):
+                        output = model(data)
+                        predicted_results = torch.argmax(output, dim=1)
                     pro_diag.extend(output.detach().cpu().numpy())
                     lab_diag.extend(diagnosis_label.cpu().numpy())
 
@@ -233,7 +245,7 @@ def main(args):
 
                 dia_acc = val_confusion_diag.summary(log_file)
                 roc_auc = Auc(pro_diag, lab_diag, args.num_classes, log_file)
-                wandb.log({"val_acc": dia_acc, "val_auc": np.mean(roc_auc)})
+                # wandb.log({"val_acc": dia_acc, "val_auc": np.mean(roc_auc)})
                 f_score_list = val_confusion_diag.get_f1score()
 
                 end_time_epoch = time.time()
@@ -282,9 +294,12 @@ def main(args):
                         data = data.cuda()
                         label = label.cuda()
                     diagnosis_label = label.squeeze(1)
-
-                    output = model(data)
-                    predicted_results = torch.argmax(output, dim=1)
+                    with torch.autocast(
+                        device_type="cuda" if args.cuda else "cpu",
+                        dtype=torch.bfloat16 if args.bf16 else torch.float16,
+                    ):
+                        output = model(data)
+                        predicted_results = torch.argmax(output, dim=1)
                     pro_diag.extend(output.detach().cpu().numpy())
                     lab_diag.extend(diagnosis_label.cpu().numpy())
 
@@ -297,7 +312,7 @@ def main(args):
                 print("Test AUC:", file=log_file)
                 roc_auc = Auc(pro_diag, lab_diag, args.num_classes, log_file)
 
-                wandb.log({"test_acc": test_acc, "test_auc": np.mean(roc_auc)})
+                # wandb.log({"test_acc": test_acc, "test_auc": np.mean(roc_auc)})
 
     except Exception:
         import traceback
@@ -354,7 +369,7 @@ parser.add_argument('--lr', type=float, default=0.002, help='learning rate')
 parser.add_argument('--weight_decay', type=float, default=0.0001, help='weight decay')
 parser.add_argument('--patience', type=int, default=100, help='patience for early stopping')
 parser.add_argument('--cuda', type=bool, default=True, help='whether to use cuda')
-parser.add_argument('--bf16', type=bool, default=False, help='whether to use cuda')
+parser.add_argument('--bf16', action="store_true", help='whether to use cuda')
 parser.add_argument('--seed', type=int, default=1, help='random seed')
 parser.add_argument('--gpu', type=str, default='1', help='gpu device ids for CUDA_VISIBLE_DEVICES')
 parser.add_argument('--backbone', type=str, default='ResNet50', help='model name')

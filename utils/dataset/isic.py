@@ -46,7 +46,7 @@ augmentation_sim = transforms.Compose(
 
 
 augmentation_test = transforms.Compose([
-    transforms.Resize(224),
+    transforms.Resize((224, 224)),
     transforms.ToTensor(),
     # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     # transforms.Normalize((0.466, 0.471, 0.380), (0.195, 0.194, 0.192))
