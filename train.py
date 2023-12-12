@@ -125,22 +125,34 @@ def main(args):
         raise ValueError("dataset error")
 
     '''load optimizer'''
+
+    # parameters = [p for p in model.backbone.parameters()] + [p for p in model.ssl_branch.parameters()]
     optimizer = optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
-    optimizer_proxies = optim.SGD(model_proxy.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
+
+    # parameters = [p for p in model.backbone.parameters()] + [p for p in model.ssl_branch.parameters()]
+    # optimizer1 = optim.SGD(parameters, lr=0.002, weight_decay=0.0001, momentum=0.9)
+
+    # parameters = [p for p in model.clip_branch.parameters()] + [p for p in model.classifier.parameters()]
+    # optimizer2 = optim.SGD(parameters, lr=0.002, weight_decay=0.01, momentum=0.9)
+
+    optimizer_proxies = optim.SGD(model_proxy.parameters(), lr=0.002, weight_decay=0.0001, momentum=0.9)
 
     # cosine lr
     lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * len(train_iterator))
+    # lr_scheduler1 = optim.lr_scheduler.CosineAnnealingLR(optimizer1, T_max=args.epochs * len(train_iterator))
+    # lr_scheduler2 = optim.lr_scheduler.CosineAnnealingLR(optimizer2, T_max=args.epochs * len(train_iterator))
     lr_scheduler_proxies = optim.lr_scheduler.CosineAnnealingLR(optimizer_proxies, T_max=args.epochs)
 
     '''load loss'''
     criterion_ce = CE_weight(cls_num_list=args.cls_num_list, E1=args.E1, E2=args.E2, E=args.epochs)
     criterion_bhp = BHP(cls_num_list=args.cls_num_list, proxy_num_list=proxy_num_list)
-    criterion_map = nn.L1Loss()
+    criterion_map = nn.SmoothL1Loss(beta=0.01)
     alpha = args.alpha
     beta = args.beta
 
     '''train'''
     f_score_list = [1.0 for _ in range(args.num_classes)]
+    steps = 0
     best_acc = 0.0
     old_model_path = None
     curr_patience = args.patience
@@ -165,14 +177,14 @@ def main(args):
                 diagnosis_label = label.squeeze(1)
 
                 optimizer.zero_grad()
+                # optimizer1.zero_grad()
+                # optimizer2.zero_grad()
 
-                with torch.autocast(
-                    device_type="cuda" if args.cuda else "cpu",
-                    dtype=torch.bfloat16 if args.bf16 else torch.float32,
-                ):
+                with torch.cuda.amp.autocast(dtype=torch.bfloat16 if args.bf16 else torch.float32):
                     output, feat_mlp, reconstruct_maps = model(data)
                     output_proxy = model_proxy()
                     feat_mlp = torch.cat([feat_mlp[0].unsqueeze(1), feat_mlp[1].unsqueeze(1)], dim=1)
+
                     loss_ce = criterion_ce(output, diagnosis_label, (e + 1), f_score_list)
                     loss_bhp = criterion_bhp(output_proxy, feat_mlp, diagnosis_label)
 
@@ -182,12 +194,27 @@ def main(args):
 
                     loss_map = criterion_map(reconstruct_maps[0], reconstruct_targets1)
                     loss_map += criterion_map(reconstruct_maps[1], reconstruct_targets2)
-                    loss = alpha * loss_ce + beta * loss_bhp + beta * loss_map
-                    wandb.log({"loss": loss, "loss_ce": loss_ce, "loss_bhp": loss_bhp, "loss_map": loss_map})
+                    loss = alpha * loss_ce + beta * loss_bhp + 0.2 * loss_map
+
+                    wandb.log(
+                        {
+                            "loss": loss,
+                            "loss_ce": loss_ce,
+                            "loss_bhp": loss_bhp,
+                            "loss_map": loss_map
+                        },
+                        step=steps
+                    )
+                    steps += 1
 
                 loss.backward()
                 optimizer.step()
                 lr_scheduler.step()
+
+                # optimizer1.step()
+                # optimizer2.step()
+                # lr_scheduler1.step()
+                # lr_scheduler2.step()
 
                 train_loss += loss.item()
 
@@ -195,13 +222,21 @@ def main(args):
                     predicted_results = torch.argmax(output, dim=1)
                     correct_num = (predicted_results.cpu() == diagnosis_label.cpu()).sum().item()
                     acc = correct_num / len(diagnosis_label)
-                    lr = optimizer.param_groups[0]["lr"]
                     train_log = (
                         f'Training epoch: {e} [{batch_index * args.batch_size}/{len(train_iterator.dataset)}], '
                         f'Loss: {loss.item():.4f}, Accuracy: {acc:.4f}, '
-                        f'Learning rate: {lr:.6f}'
+                        f'Learning rate: {optimizer.param_groups[0]["lr"]:.6f}'
+                        # f'Learning rate 1: {optimizer1.param_groups[0]["lr"]:.6f}, '
+                        # f'Learning rate 2: {optimizer2.param_groups[0]["lr"]:.6f}'
                     )
-                    wandb.log({"lr": lr})
+                    wandb.log(
+                        {
+                            "lr": optimizer.param_groups[0]["lr"],
+                            # "lr_1": optimizer1.param_groups[0]["lr"],
+                            # 'lr_2': optimizer2.param_groups[0]['lr']
+                        },
+                        step=steps,
+                    )
                     print(train_log)
                     print(train_log, file=log_file)
 
@@ -217,6 +252,7 @@ def main(args):
             model_proxy.eval()
             pro_diag, lab_diag = [], []
             val_confusion_diag = ConfusionMatrix(num_classes=args.num_classes, labels=list(range(args.num_classes)))
+            valid_loss_ce = 0.0
             with torch.no_grad():
                 for batch_index, (data, label) in enumerate(valid_iterator):
                     if args.cuda:
@@ -224,16 +260,31 @@ def main(args):
                         label = label.cuda()
                     diagnosis_label = label.squeeze(1)
 
-                    output = model(data)
-                    predicted_results = torch.argmax(output, dim=1)
-                    pro_diag.extend(output.detach().cpu().numpy())
-                    lab_diag.extend(diagnosis_label.cpu().numpy())
-
-                    val_confusion_diag.update(predicted_results.cpu().numpy(), diagnosis_label.cpu().numpy())
+                    with torch.cuda.amp.autocast(dtype=torch.float32):
+                        output = model(data)
+                        output = output.float()
+                        predicted_results = torch.argmax(output, dim=1)
+                        pro_diag.extend(output.detach().cpu().numpy())
+                        lab_diag.extend(diagnosis_label.cpu().numpy())
+                        val_confusion_diag.update(predicted_results.cpu().numpy(), diagnosis_label.cpu().numpy())
+                        valid_loss_ce += criterion_ce(output, diagnosis_label, (e + 1),
+                                                      f_score_list) / len(valid_iterator)
 
                 dia_acc = val_confusion_diag.summary(log_file)
+                mean_metrics = val_confusion_diag.get_metrics()
                 roc_auc = Auc(pro_diag, lab_diag, args.num_classes, log_file)
-                wandb.log({"val_acc": dia_acc, "val_auc": np.mean(roc_auc)})
+                wandb.log(
+                    {
+                        "valid_loss_ce": valid_loss_ce,
+                        "val_acc": dia_acc,
+                        "val_auc": np.mean(roc_auc),
+                        'val_precision': mean_metrics['precision'],
+                        'val_sensitivity': mean_metrics['sensitivity'],
+                        'val_specificity': mean_metrics['specificity'],
+                        'val_f1_score': mean_metrics['f1_score'],
+                    },
+                    step=steps
+                )
                 f_score_list = val_confusion_diag.get_f1score()
 
                 end_time_epoch = time.time()
@@ -243,7 +294,9 @@ def main(args):
                 val_log = (
                     f"Total training time: {total_training_time:.4f}s, "
                     f"{training_time_epoch:.4f} s/epoch, "
-                    f"Estimated remaining time: {remaining_time:.4f}s"
+                    f"Estimated remaining time: {remaining_time:.4f}s, "
+                    f"Val metrics: {mean_metrics}, \n"
+                    f"Feat_Fusion_weight: {model.fusion_weight}, \n"
                 )
                 print(val_log)
                 print(val_log, file=log_file)
@@ -293,11 +346,24 @@ def main(args):
                 print("Test confusion matrix:")
                 print("Test confusion matrix:", file=log_file)
                 test_acc = confusion_diag.summary(log_file)
+                mean_metrics = confusion_diag.get_metrics()
                 print("Test AUC:")
                 print("Test AUC:", file=log_file)
                 roc_auc = Auc(pro_diag, lab_diag, args.num_classes, log_file)
 
-                wandb.log({"test_acc": test_acc, "test_auc": np.mean(roc_auc)})
+                print(f"Test metrics: {mean_metrics}")
+                print(f"Test metrics: {mean_metrics}", file=log_file)
+                wandb.log(
+                    {
+                        "test_acc": test_acc,
+                        "test_auc": np.mean(roc_auc),
+                        'test_precision': mean_metrics['precision'],
+                        'test_sensitivity': mean_metrics['sensitivity'],
+                        'test_specificity': mean_metrics['specificity'],
+                        'test_f1_score': mean_metrics['f1_score'],
+                    },
+                    step=steps
+                )
 
     except Exception:
         import traceback
@@ -356,16 +422,14 @@ parser.add_argument('--patience', type=int, default=100, help='patience for earl
 parser.add_argument('--cuda', type=bool, default=True, help='whether to use cuda')
 parser.add_argument('--bf16', type=bool, default=False, help='whether to use cuda')
 parser.add_argument('--seed', type=int, default=1, help='random seed')
-parser.add_argument('--gpu', type=str, default='1', help='gpu device ids for CUDA_VISIBLE_DEVICES')
+parser.add_argument('--gpu', type=str, default='0', help='gpu device ids for CUDA_VISIBLE_DEVICES')
 parser.add_argument('--backbone', type=str, default='ResNet50', help='model name')
-
 parser.add_argument('--exp_name', type=str, default='', help='exp name')
 
 
 # loss weights
-parser.add_argument('--alpha', type=float, default=2.0,
-                    choices=[0.5, 1.0, 2.0], help='weight of the cross entropy loss')
-parser.add_argument('--beta', type=float, default=1.0, choices=[0.5, 1.0, 2.0], help='weight of the BHP loss')
+parser.add_argument('--alpha', type=float, default=2.0, choices=[0.25, 0.5, 1.0, 2.0], help='weight of the CE loss')
+parser.add_argument('--beta', type=float, default=1.0, choices=[0.25, 0.5, 1.0, 2.0], help='weight of the BHP loss')
 # hyperparameters for ce loss
 parser.add_argument('--E1', type=int, default=20, choices=[20, 30, 40], help='hyperparameter for ce loss')
 parser.add_argument('--E2', type=int, default=50, choices=[50, 60, 70], help='hyperparameter for ce loss')

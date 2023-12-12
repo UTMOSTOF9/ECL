@@ -49,7 +49,7 @@ class CE_weight(nn.Module):
                 now_power = (e - self.E1) / (self.E2 - self.E1)
                 per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
                 per_cls_weights = torch.tensor(per_cls_weights, device=x.device, dtype=x.dtype)
-            return F.cross_entropy(x, target, weight=per_cls_weights)
+            return F.cross_entropy(x, target, weight=per_cls_weights, label_smoothing=0.0)
 
         else:
             with torch.no_grad():
@@ -62,7 +62,7 @@ class CE_weight(nn.Module):
                 now_power = (e - self.E2) / (self.E - self.E2)
                 per_cls_weights = [torch.pow(num, now_power) for num in self.weight]
                 per_cls_weights = torch.tensor(per_cls_weights, device=x.device, dtype=x.dtype)
-            return F.cross_entropy(x, target, weight=per_cls_weights)
+            return F.cross_entropy(x, target, weight=per_cls_weights, label_smoothing=0.0)
 
 
 class BHP(nn.Module):
@@ -111,6 +111,8 @@ class BHP(nn.Module):
         # get similarity matrix
         features = torch.cat(torch.unbind(features, dim=1), dim=0)
         features = torch.cat([features, proxy], dim=0)
+        # with torch.no_grad():
+        #     features_targets = features.detach().clone()
         logits = features.mm(features.T)
         logits = torch.div(logits, self.temperature)
 

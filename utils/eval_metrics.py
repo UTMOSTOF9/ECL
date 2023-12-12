@@ -58,8 +58,8 @@ class ConfusionMatrix(object):
             Precision = round(TP/(TP+FP), 4) if TP+FP != 0 else 0.
             Sensitivity = round(TP/(TP+FN), 4) if TP+FN != 0 else 0.
             Specificity = round(TN/(TN+FP), 4) if TN+FP != 0 else 0.
-            F1_score = round((2*Sensitivity*Precision)/(Sensitivity+Precision),
-                             4) if (Sensitivity != 0 and Specificity != 0) else 0
+            F1_score = round((2*Sensitivity*Precision)/(Sensitivity+Precision), 4) \
+                if (Sensitivity != 0 and Specificity != 0) else 0
 
             self.PrecisionofEachClass[i] = Precision
             self.SensitivityofEachClass[i] = Sensitivity
@@ -73,6 +73,15 @@ class ConfusionMatrix(object):
 
     def get_f1score(self):
         return self.F1_scoreofEachClass
+
+    def get_metrics(self):
+        return {
+            'acc': self.acc,
+            'precision': np.mean(self.PrecisionofEachClass),
+            'sensitivity': np.mean(self.SensitivityofEachClass),
+            'specificity': np.mean(self.SpecificityofEachClass),
+            'f1_score': np.mean(self.F1_scoreofEachClass)
+        }
 
 
 '''ROC AUC'''

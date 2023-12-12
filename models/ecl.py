@@ -16,6 +16,7 @@ from timm import create_model
 from torchvision.models.feature_extraction import create_feature_extractor
 from torchvision.ops import FeaturePyramidNetwork
 
+from .cross_attention import CrossAttention
 from .cutout import Cutout
 
 
@@ -38,69 +39,76 @@ class ECL_model(nn.Module):
         self.backbone = create_feature_extractor(cnns, ['layer1', 'layer2', 'layer3', 'layer4', 'avgpool'])
         self.num_classes = num_classes
 
-        self.clip_feature_extractor = clip.load('ViT-B/32')[0]
+        self.clip_feature_extractor = clip.load('ViT-B/32')[0].eval()
+        for param in self.clip_feature_extractor.parameters():
+            param.requires_grad = False
 
         dimension = 512*4
 
-        self.clip_dimension_adjust = nn.Sequential(
-            nn.Linear(512, feat_dim),
-            nn.BatchNorm1d(feat_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(feat_dim, feat_dim),
+        self.ssl_branch = nn.ModuleDict(
+            {
+                'fpn': FeaturePyramidNetwork([256, 512, 1024, 2048], 16),
+                'generate_head': nn.Conv2d(16, 3, 3, 1, 1),
+            }
         )
-
-        self.head = nn.Sequential(
+        self.clip_branch = nn.ModuleDict(
+            {
+                'clip_dimension_adjust': nn.Linear(512, dimension),
+                'feat_fusion': nn.TransformerEncoderLayer(
+                    d_model=dimension*2,
+                    nhead=8,
+                    dim_feedforward=dimension*4,
+                    dropout=0.1,
+                    batch_first=True,
+                    norm_first=True,
+                )
+            }
+        )
+        self.fusion_head = nn.Sequential(
             nn.Linear(dimension, feat_dim),
             nn.BatchNorm1d(feat_dim),
             nn.ReLU(inplace=True),
             nn.Linear(feat_dim, feat_dim),
         )
-
-        # self.feat_fusion = nn.Linear(feat_dim * 2, feat_dim)
-        self.feat_fusion = nn.Sequential(
-            nn.TransformerEncoderLayer(d_model=feat_dim * 2, dim_feedforward=feat_dim * 4, nhead=8, batch_first=True),
-            nn.BatchNorm1d(feat_dim * 2),
-            nn.ReLU(inplace=True),
-            nn.Linear(feat_dim * 2, feat_dim),
-        )
-
-        self.fc = nn.Linear(dimension, self.num_classes)
-        self.fpn = FeaturePyramidNetwork([256, 512, 1024, 2048], 32)
-        self.generate_head = nn.Conv2d(32, 3, 3, 1, 1)
+        self.fusion_weight = nn.Parameter(torch.ones(2), requires_grad=True)
+        self.classifier = nn.Linear(dimension, self.num_classes)
+        self.flatten = nn.Flatten()
         self.cutout = Cutout(1, 4, fill_value=0)
 
     def forward(self, x):
         if isinstance(x, list):
-            feat1 = self.backbone(x[0])['avgpool']
-            b = feat1.shape[0]
-            feat1 = feat1.view(b, -1)
-            feat1_mlp = self.head(feat1)
-            logits = self.fc(feat1)
+            feat1 = self.flatten(self.backbone(x[0])['avgpool'])
+            feat2 = self.flatten(self.backbone(x[1])['avgpool'])
 
-            feat2 = self.backbone(x[1])['avgpool']
-            feat2 = feat2.view(feat2.shape[0], -1)
-            feat2_mlp = self.head(feat2)
+            # classifier
+            logits = self.classifier(feat1)
 
-            # with clip
-            clip_feat1 = self.clip_dimension_adjust(self.clip_feature_extractor.encode_image(x[0]))
-            clip_feat2 = self.clip_dimension_adjust(self.clip_feature_extractor.encode_image(x[1]))
-            fusion_feat1 = F.normalize(self.feat_fusion(torch.cat([feat1_mlp, clip_feat1], dim=-1)))
-            fusion_feat2 = F.normalize(self.feat_fusion(torch.cat([feat2_mlp, clip_feat2], dim=-1)))
+            # clip
+            with torch.no_grad():
+                clip_feat1 = self.clip_feature_extractor.encode_image(x[0])
+                clip_feat2 = self.clip_feature_extractor.encode_image(x[1])
 
-            feats = self.backbone(self.cutout(x[0]))
-            reconstruct_maps1 = self.generate_head(self.fpn(feats)['layer1'])
+            clip_feat1 = self.clip_branch['clip_dimension_adjust'](clip_feat1)
+            clip_feat2 = self.clip_branch['clip_dimension_adjust'](clip_feat2)
 
-            feats = self.backbone(self.cutout(x[1]))
-            reconstruct_maps2 = self.generate_head(self.fpn(feats)['layer1'])
+            w = self.fusion_weight
+            fusion_feat1 = F.normalize(self.fusion_head(w[0] * clip_feat1 + w[1] * feat1))
+            fusion_feat2 = F.normalize(self.fusion_head(w[0] * clip_feat2 + w[1] * feat2))
+
+            # fusion_feat1 = F.normalize(self.clip_branch['feat_fusion'](torch.cat((clip_feat1, feat1), dim=-1)))
+            # fusion_feat2 = F.normalize(self.clip_branch['feat_fusion'](torch.cat((clip_feat2, feat2), dim=-1)))
+
+            # ssl
+            feats1 = self.backbone(self.cutout(x[0]))
+            feats2 = self.backbone(self.cutout(x[1]))
+            reconstruct_maps1 = self.ssl_branch['generate_head'](self.ssl_branch['fpn'](feats1)['layer1'])
+            reconstruct_maps2 = self.ssl_branch['generate_head'](self.ssl_branch['fpn'](feats2)['layer1'])
 
             return logits, [fusion_feat1, fusion_feat2], [reconstruct_maps1, reconstruct_maps2]
 
         else:
-            feat1 = self.backbone(x)['avgpool']
-            feat1 = feat1.view(feat1.shape[0], -1)
-
-            logits = self.fc(feat1)
-
+            feat1 = self.flatten(self.backbone(x)['avgpool'])
+            logits = self.classifier(feat1)
             return logits
 
 

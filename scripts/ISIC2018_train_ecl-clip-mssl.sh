@@ -6,5 +6,6 @@ ipython --pdb -- train.py --dataset ISIC2018 \
     --gpu 0 \
     --backbone ResNet50 \
     --bf16 True \
-    --exp_name ecl-clip-ar \
-    --model_path ./results/ISIC2018_ecl-clip-ar/
+    --alpha 0.25 \
+    --exp_name ecl-clip-mssl-2018 \
+    --model_path ./results/ecl-clip-mssl-2018/
