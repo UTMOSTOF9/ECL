@@ -97,29 +97,29 @@ def main(args):
     if args.dataset == 'ISIC2018':
         train_iterator = DataLoader(
             isic2018_dataset(path=args.data_path, transform=transfrom_train, mode='train'),
-            batch_size=args.batch_size, shuffle=True, num_workers=8, drop_last=True
+            batch_size=args.batch_size, shuffle=True, num_workers=16, drop_last=True
         )
         valid_iterator = DataLoader(
             isic2018_dataset(path=args.data_path, transform=augmentation_test, mode='valid'),
-            batch_size=1, shuffle=False, num_workers=4
+            batch_size=1, shuffle=False, num_workers=8
         )
         test_iterator = DataLoader(
             isic2018_dataset(path=args.data_path, transform=augmentation_test, mode='test'),
-            batch_size=1, shuffle=False, num_workers=4
+            batch_size=1, shuffle=False, num_workers=8
         )
 
     elif args.dataset == 'ISIC2019':
         train_iterator = DataLoader(
             isic2019_dataset(path=args.data_path, transform=transfrom_train, mode='train'),
-            batch_size=args.batch_size, shuffle=True, num_workers=8, drop_last=True
+            batch_size=args.batch_size, shuffle=True, num_workers=16, drop_last=True
         )
         valid_iterator = DataLoader(
             isic2019_dataset(path=args.data_path, transform=augmentation_test, mode='valid'),
-            batch_size=1, shuffle=False, num_workers=4
+            batch_size=1, shuffle=False, num_workers=8
         )
         test_iterator = DataLoader(
             isic2019_dataset(path=args.data_path, transform=augmentation_test, mode='test'),
-            batch_size=1, shuffle=False, num_workers=4
+            batch_size=1, shuffle=False, num_workers=8
         )
     else:
         raise ValueError("dataset error")
@@ -377,10 +377,61 @@ parser.add_argument('--beta', type=float, default=1.0, choices=[0.5, 1.0, 2.0], 
 # hyperparameters for ce loss
 parser.add_argument('--E1', type=int, default=20, choices=[20, 30, 40], help='hyperparameter for ce loss')
 parser.add_argument('--E2', type=int, default=50, choices=[50, 60, 70], help='hyperparameter for ce loss')
+# hyperparameters for fusion
+parser.add_argument('--clip_f', type=float, default=0.5, help='hyperparameter for clip fusion')
+parser.add_argument('--cnn_f', type=float, default=0.5, help='hyperparameter for cnn fusioin')
 
 # hyperparameters for model
 parser.add_argument('--feat_dim', dest='feat_dim', type=int, default=128)
 
+
+def test(old_model_path, args):
+    Path(args.log_path).mkdir(parents=True, exist_ok=True)
+    log_file = open(os.path.join(args.log_path, 'test_log.txt'), 'w')
+
+    '''print args'''
+    for arg in vars(args):
+        print(arg, getattr(args, arg))
+        print(arg, getattr(args, arg), file=log_file)
+
+    '''load models'''
+    model = build_model(name=args.backbone, num_classes=args.num_classes, feat_dim=args.feat_dim)
+    model = model.cuda()
+    '''load dataset'''
+    if args.dataset == 'ISIC2018':
+        test_iterator = DataLoader(
+            isic2018_dataset(path=args.data_path, transform=augmentation_test, mode='test'),
+            batch_size=1, shuffle=False, num_workers=4
+        )
+        
+    model.load_state_dict(torch.load(old_model_path), strict=True)
+    model.eval()
+
+    pro_diag, lab_diag = [], []
+    confusion_diag = ConfusionMatrix(num_classes=args.num_classes, labels=list(range(args.num_classes)))
+    with torch.no_grad():
+        for batch_index, (data, label) in enumerate(test_iterator):
+            if args.cuda:
+                data = data.cuda()
+                label = label.cuda()
+            diagnosis_label = label.squeeze(1)
+            with torch.autocast(
+                device_type="cuda" if args.cuda else "cpu",
+                dtype=torch.bfloat16 if args.bf16 else torch.float16,
+            ):
+                output = model(data)
+                predicted_results = torch.argmax(output, dim=1)
+            pro_diag.extend(output.detach().cpu().numpy())
+            lab_diag.extend(diagnosis_label.cpu().numpy())
+
+            confusion_diag.update(predicted_results.cpu().numpy(), diagnosis_label.cpu().numpy())
+
+        print("Test confusion matrix:")
+        print("Test confusion matrix:", file=log_file)
+        test_acc = confusion_diag.summary(log_file)
+        print("Test AUC:")
+        print("Test AUC:", file=log_file)
+        roc_auc = Auc(pro_diag, lab_diag, args.num_classes, log_file)
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -398,4 +449,6 @@ if __name__ == '__main__':
     if args.log_path is None:
         args.log_path = args.model_path
     main(args)
+    
+    # test("./results/ISIC2018_ecl-clip-ar-evl-28/bestacc_model_103.pth", args)
     print("Done!")

@@ -78,9 +78,13 @@ class ECL_EVL_model(nn.Module):
         num_classes:int=8, 
         feat_dim:int=512, # 128
         cls_dropout:float=0.5, 
+        cnn_f:float=0.2,
+        clip_f:float=0.8,
     ):
         super(ECL_EVL_model, self).__init__()
         self.num_classes = num_classes
+        self.cnn_f = cnn_f
+        self.clip_f = clip_f
         
         # backbone
         cnns = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
@@ -101,14 +105,7 @@ class ECL_EVL_model(nn.Module):
         
         self.clip_head = nn.Sequential(
             nn.LayerNorm(clip_feature_dim),
-            nn.Linear(clip_feature_dim, feat_dim),
-        )
-        
-        self.feat_fusion = nn.Sequential(
-            nn.TransformerEncoderLayer(d_model=feat_dim * 2, dim_feedforward=feat_dim * 4, nhead=8, batch_first=True),
-            nn.BatchNorm1d(feat_dim * 2),
-            nn.ReLU(inplace=True),
-            nn.Linear(feat_dim * 2, feat_dim),
+            nn.Linear(clip_feature_dim, backbone_feature_dim),
         )
         
         # self training
@@ -118,33 +115,41 @@ class ECL_EVL_model(nn.Module):
 
     def forward(self, x):
         if isinstance(x, list):
-            feat1 = self.backbone(x[0])['avgpool']
-            feat1 = feat1.view(feat1.shape[0], -1) # dimension
-            feat1_mlp =  self.backbone_head(feat1)
-            logits = self.backbone_fc(feat1)
-
-            feat2 = self.backbone(x[1])['avgpool']
-            feat2 = feat2.view(feat2.shape[0], -1)
-            feat2_mlp = self.backbone_head(feat2)
-
             # with clip
             clip_feat1 = self.clip_head(self.clip_feature_extractor(x[0]))
             clip_feat2 = self.clip_head(self.clip_feature_extractor(x[1]))
-            fusion_feat1 = F.normalize(self.feat_fusion(torch.cat([feat1_mlp, clip_feat1], dim=-1)))
-            fusion_feat2 = F.normalize(self.feat_fusion(torch.cat([feat2_mlp, clip_feat2], dim=-1)))
+            
+            feat1 = self.backbone(x[0])['avgpool']
+            feat1 = feat1.view(feat1.shape[0], -1) # dimension
+            # fusion
+            fusion_feat1 = self.cnn_f * feat1 + self.clip_f * clip_feat1
+            feat1_mlp = F.normalize(self.backbone_head(fusion_feat1))
+            logits = self.backbone_fc(fusion_feat1)
+
+            feat2 = self.backbone(x[1])['avgpool']
+            feat2 = feat2.view(feat2.shape[0], -1)
+            # fusion
+            fusion_feat2 = self.cnn_f * feat2 + self.clip_f * clip_feat2
+            feat2_mlp = F.normalize(self.backbone_head(fusion_feat2))
+
+            # fusion_feat1 = F.normalize(self.feat_fusion(torch.cat([feat1_mlp, clip_feat1], dim=-1)))
+            # fusion_feat2 = F.normalize(self.feat_fusion(torch.cat([feat2_mlp, clip_feat2], dim=-1)))
 
             feats = self.backbone(self.cutout(x[0]))
             reconstruct_maps1 = self.generate_head(self.fpn(feats)['layer1'])
             feats = self.backbone(self.cutout(x[1]))
             reconstruct_maps2 = self.generate_head(self.fpn(feats)['layer1'])
 
-            return logits, [fusion_feat1, fusion_feat2], [reconstruct_maps1, reconstruct_maps2]
+            return logits, [feat1_mlp, feat2_mlp], [reconstruct_maps1, reconstruct_maps2]
 
         else:
             feat1 = self.backbone(x)['avgpool']
             feat1 = feat1.view(feat1.shape[0], -1) # dimension
             # feat1_mlp = F.normalize(self.head(feat1))
-            logits = self.backbone_fc(feat1)
+            clip_feat1 = self.clip_head(self.clip_feature_extractor(x))
+            fusion_feat1 = self.cnn_f * feat1 + self.clip_f * clip_feat1
+            
+            logits = self.backbone_fc(fusion_feat1)
 
             return logits
 
