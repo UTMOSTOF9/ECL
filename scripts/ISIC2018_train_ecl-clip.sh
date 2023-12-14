@@ -8,6 +8,6 @@ ipython --pdb -- train.py --dataset ISIC2018 \
     --bf16 True \
     --alpha 2 \
     --beta 1 \
-    --gamma 0.01 \
-    --exp_name ecl-clip-mssl-2018 \
-    --model_path ./results/ecl-clip-mssl-2018/
+    --gamma 0 \
+    --exp_name ecl-clip-2018 \
+    --model_path ./results/ecl-clip-2018/

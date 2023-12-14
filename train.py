@@ -75,7 +75,7 @@ def main(args):
         print(arg, getattr(args, arg), file=log_file)
 
     '''load models'''
-    model = build_model(name=args.backbone, num_classes=args.num_classes, feat_dim=args.feat_dim)
+    model = build_model(name=args.model, num_classes=args.num_classes, feat_dim=args.feat_dim)
     proxy_num_list = get_proxies_num(args.cls_num_list)
     model_proxy = balanced_proxies(dim=args.feat_dim, proxy_num=sum(proxy_num_list))
 
@@ -126,8 +126,14 @@ def main(args):
 
     '''load optimizer'''
 
-    # parameters = [p for p in model.backbone.parameters()] + [p for p in model.ssl_branch.parameters()]
     optimizer = optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
+
+    # parameters = [p for p in model.backbone.parameters()] + \
+    #     [p for p in model.ssl_branch.parameters()] + \
+    #     [p for p in model.fusion_head.parameters()] + \
+    #     [p for p in model.classifier.parameters()]
+    # optimizer1 = optim.SGD(parameters, lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
+    # optimizer2 = optim.SGD(model.clip_branch.parameters(), lr=args.lr, weight_decay=0.01,  momentum=0.9)
 
     # parameters = [p for p in model.backbone.parameters()] + [p for p in model.ssl_branch.parameters()]
     # optimizer1 = optim.SGD(parameters, lr=0.002, weight_decay=0.0001, momentum=0.9)
@@ -135,7 +141,7 @@ def main(args):
     # parameters = [p for p in model.clip_branch.parameters()] + [p for p in model.classifier.parameters()]
     # optimizer2 = optim.SGD(parameters, lr=0.002, weight_decay=0.01, momentum=0.9)
 
-    optimizer_proxies = optim.SGD(model_proxy.parameters(), lr=0.002, weight_decay=0.0001, momentum=0.9)
+    optimizer_proxies = optim.SGD(model_proxy.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9)
 
     # cosine lr
     lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * len(train_iterator))
@@ -147,8 +153,6 @@ def main(args):
     criterion_ce = CE_weight(cls_num_list=args.cls_num_list, E1=args.E1, E2=args.E2, E=args.epochs)
     criterion_bhp = BHP(cls_num_list=args.cls_num_list, proxy_num_list=proxy_num_list)
     criterion_map = nn.SmoothL1Loss(beta=0.01)
-    alpha = args.alpha
-    beta = args.beta
 
     '''train'''
     f_score_list = [1.0 for _ in range(args.num_classes)]
@@ -194,7 +198,7 @@ def main(args):
 
                     loss_map = criterion_map(reconstruct_maps[0], reconstruct_targets1)
                     loss_map += criterion_map(reconstruct_maps[1], reconstruct_targets2)
-                    loss = alpha * loss_ce + beta * loss_bhp + 0.2 * loss_map
+                    loss = args.alpha * loss_ce + args.beta * loss_bhp + args.gamma * loss_map
 
                     wandb.log(
                         {
@@ -294,9 +298,9 @@ def main(args):
                 val_log = (
                     f"Total training time: {total_training_time:.4f}s, "
                     f"{training_time_epoch:.4f} s/epoch, "
-                    f"Estimated remaining time: {remaining_time:.4f}s, "
+                    f"Estimated remaining time: {remaining_time:.4f}s, \n"
                     f"Val metrics: {mean_metrics}, \n"
-                    f"Feat_Fusion_weight: {model.fusion_weight}, \n"
+                    f"Feat_Fusion_weight: {getattr(model, 'fusion_weight', None)}, \n"
                 )
                 print(val_log)
                 print(val_log, file=log_file)
@@ -423,17 +427,16 @@ parser.add_argument('--cuda', type=bool, default=True, help='whether to use cuda
 parser.add_argument('--bf16', type=bool, default=False, help='whether to use cuda')
 parser.add_argument('--seed', type=int, default=1, help='random seed')
 parser.add_argument('--gpu', type=str, default='0', help='gpu device ids for CUDA_VISIBLE_DEVICES')
-parser.add_argument('--backbone', type=str, default='ResNet50', help='model name')
+parser.add_argument('--model', type=str, default='ECL', help='model name')
 parser.add_argument('--exp_name', type=str, default='', help='exp name')
 
 
 # loss weights
 parser.add_argument('--alpha', type=float, default=2.0,
-                    choices=[0.1, 0.25, 0.5, 1.0, 2.0], help='weight of the CE loss')
+                    choices=[0.01, 0.1, 0.25, 0.5, 1.0, 2.0], help='weight of the CE loss')
 parser.add_argument('--beta', type=float, default=1.0,
                     choices=[0, 0.1, 0.25, 0.5, 1.0, 2.0], help='weight of the BHP loss')
-parser.add_argument('--gamma', type=float, default=1.0,
-                    choices=[0, 0.1, 0.25, 0.5, 1.0, 2.0], help='weight of the MSSL loss')
+parser.add_argument('--gamma', type=float, default=1.0, help='weight of the MSSL loss')
 # hyperparameters for ce loss
 parser.add_argument('--E1', type=int, default=20, choices=[20, 30, 40], help='hyperparameter for ce loss')
 parser.add_argument('--E2', type=int, default=50, choices=[50, 60, 70], help='hyperparameter for ce loss')

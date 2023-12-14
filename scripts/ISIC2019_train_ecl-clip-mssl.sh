@@ -4,10 +4,10 @@ ipython --pdb -- train.py --dataset ISIC2019 \
     --lr 0.002 \
     --epochs 100 \
     --gpu 0 \
-    --backbone ResNet50 \
+    --model ECL_CLIP_2W \
     --bf16 True \
-    --alpha 0.1 \
+    --alpha 2 \
     --beta 1 \
-    --gamma 0.25 \
-    --exp_name ecl-clip-mssl-2019 \
-    --model_path ./results/ecl-clip-mssl-2019/
+    --gamma 0.1 \
+    --exp_name ecl-clip-mssl-2019-2 \
+    --model_path ./results/ecl-clip-mssl-2019-2/
